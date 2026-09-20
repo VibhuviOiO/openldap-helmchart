@@ -16,7 +16,7 @@ entries:
           url: https://github.com/VibhuviOiO/openldap-docker
     apiVersion: v2
     appVersion: 2.6.10
-    created: "2026-09-20T21:31:10.951886592Z"
+    created: "2026-09-20T21:43:00.843344489Z"
     description: Production OpenLDAP with multi-provider replication, overlays and
       TLS (vibhuvioio/openldap)
     digest: e3d9146d823debf2d215f90ad57ccc7a04e0ab912525e866a2c0a7c495cce22c
@@ -40,4 +40,49 @@ entries:
     urls:
     - https://VibhuviOiO.github.io/openldap-helmchart/openldap-2.6.10.tgz
     version: 2.6.10
-generated: "2026-09-20T21:31:10.950747354Z"
+  - annotations:
+      artifacthub.io/category: database
+      artifacthub.io/changes: |
+        - kind: added
+          description: Initial chart - StatefulSet, per-pod PVCs, multi-provider replication
+      artifacthub.io/images: |
+        - name: openldap
+          image: vibhuvioio/openldap:2.6.10
+      artifacthub.io/license: MIT
+      artifacthub.io/links: |
+        - name: Docker image
+          url: https://hub.docker.com/r/vibhuvioio/openldap
+        - name: Image source
+          url: https://github.com/VibhuviOiO/openldap-docker
+    apiVersion: v2
+    appVersion: 2.6.10
+    created: "2026-09-20T21:43:00.842477915Z"
+    description: Production OpenLDAP with multi-provider replication, overlays and
+      TLS (vibhuvioio/openldap)
+    digest: c6ab7716da808695028015f68bb1b5dec8058e611236b8e5d7dad2b91f6eae65
+    home: https://vibhuvioio.com/openldap-docker/
+    icon: https://vibhuvioio.com/img/logo.svg
+    keywords:
+    - ldap
+    - openldap
+    - ldap-server
+    - directory
+    - identity
+    - authentication
+    - replication
+    - high-availability
+    - multi-master
+    - slapd
+    kubeVersion: '>=1.24.0-0'
+    maintainers:
+    - name: Jinna Baalu
+      url: https://github.com/VibhuviOiO
+    name: openldap
+    sources:
+    - https://github.com/VibhuviOiO/openldap-helmchart
+    - https://github.com/VibhuviOiO/openldap-docker
+    type: application
+    urls:
+    - https://VibhuviOiO.github.io/openldap-helmchart/openldap-2.6.10-1.tgz
+    version: 2.6.10-1
+generated: "2026-09-20T21:43:00.841472974Z"
