@@ -7,13 +7,19 @@ type: application
 version: 2.6.10
 appVersion: "2.6.10"
 kubeVersion: ">=1.24.0-0"
+# Square, vector, and already yours.
+icon: https://vibhuvioio.com/img/logo.svg
 keywords:
   - ldap
   - openldap
+  - ldap-server
   - directory
   - identity
+  - authentication
   - replication
   - high-availability
+  - multi-master
+  - slapd
 home: https://vibhuvioio.com/openldap-docker/
 sources:
   - https://github.com/VibhuviOiO/openldap-helmchart
@@ -23,6 +29,9 @@ maintainers:
     url: https://github.com/VibhuviOiO
 annotations:
   artifacthub.io/license: MIT
+  # What Artifact Hub browses by. Its listing of the leading openldap charts is
+  # "database", so this is the matching shelf.
+  artifacthub.io/category: database
   artifacthub.io/images: |
     - name: openldap
       image: vibhuvioio/openldap:2.6.10

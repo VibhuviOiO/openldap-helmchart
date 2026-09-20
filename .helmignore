@@ -8,3 +8,4 @@
 *.swo
 .DS_Store
 ci/
+hack/

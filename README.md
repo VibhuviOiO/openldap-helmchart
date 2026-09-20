@@ -120,6 +120,18 @@ yours:
 `vibhuvioio` (rather than `vibhuvioio-openldap`) because one Artifact Hub repository can hold
 every chart you publish, and the name matches the `helm repo add vibhuvioio` alias.
 
+The repository name is only your **publisher namespace** — it does not affect search. Artifact
+Hub matches on the chart name and keywords, which is why the leading OpenLDAP chart
+(`openldap`) appears under repositories called `helm-openldap`, `symas-openldap`,
+`kubelauncher` and `nxest` alike. Keep `name: openldap`.
+
+| field | value | why it matters for search |
+|---|---|---|
+| `name` | `openldap` | what a search for `openldap` matches; `open-ldap` matches **nothing** |
+| `keywords` | `ldap`, `openldap`, `slapd`, … | secondary match |
+| `artifacthub.io/category` | `database` | the shelf Artifact Hub browses by |
+| `description` | first line of `Chart.yaml` | shown in the result list |
+
 The repository page becomes `artifacthub.io/packages/helm/vibhuvioio/openldap`, while
 `helm install vibhuvioio/openldap` keeps working unchanged.
 

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>openldap Helm chart</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0 auto; padding: 3rem 1.25rem; max-width: 44rem;
+         font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+  p.lead { color: #6b7280; margin: 0 0 2rem; }
+  h2 { font-size: 1rem; text-transform: uppercase; letter-spacing: .06em;
+       color: #6b7280; margin: 2rem 0 .5rem; }
+  pre { background: #f3f4f6; padding: .9rem 1rem; border-radius: 8px; overflow-x: auto;
+        font-size: .86rem; }
+  ul { padding-left: 1.2rem; }
+  a { color: #2563eb; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #0b0f19; color: #e5e7eb; }
+    p.lead, h2 { color: #9ca3af; }
+    pre { background: #161b26; }
+    a { color: #7aa2f7; }
+  }
+</style>
+</head>
+<body>
+
+<h1>openldap</h1>
+<p class="lead">A Helm chart for running vibhuvioio/openldap on Kubernetes as a
+multi-provider (N-way multi-master) OpenLDAP cluster.</p>
+
+<p>This URL is a Helm chart repository. It has no web pages by design &mdash; the files
+here are <code>index.yaml</code> and the packaged charts. Install from it:</p>
+
+<pre>helm repo add vibhuvioio https://VibhuviOiO.github.io/openldap-helmchart
+helm repo update
+helm install ldap vibhuvioio/openldap -n directory --create-namespace \
+  --set auth.existingSecret=ldap-auth</pre>
+
+<h2>Links</h2>
+<ul>
+  <li><a href="https://artifacthub.io/packages/helm/vibhuvioio/openldap">Artifact Hub</a></li>
+  <li><a href="https://hub.docker.com/r/vibhuvioio/openldap">Docker Hub image</a></li>
+  <li><a href="https://github.com/VibhuviOiO/openldap-helmchart">Chart source</a></li>
+  <li><a href="https://github.com/VibhuviOiO/openldap-docker">Image source</a></li>
+  <li><a href="https://vibhuvioio.com">vibhuvioio.com</a></li>
+</ul>
+
+<h2>Raw repository index</h2>
+<p><a href="index.yaml">index.yaml</a></p>
+
+</body>
+</html>
