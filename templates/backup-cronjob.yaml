@@ -1,0 +1,107 @@
+{{- if .Values.backup.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openldap.fullname" . }}-backup
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.backup.persistence.accessModes | nindent 4 }}
+  {{- if .Values.persistence.storageClass }}
+  storageClassName: {{ .Values.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.backup.persistence.size }}
+---
+# Online LDIF export over LDAP, not a crash-consistent snapshot: slapcat is
+# offline and the data volume is RWO and held by a running provider.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "openldap.fullname" . }}-backup
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbidden
+  successfulJobsHistoryLimit: {{ .Values.backup.historyLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.historyLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "openldap.selectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: export
+              image: {{ include "openldap.image" . | quote }}
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              command: ["/bin/bash", "-c"]
+              args:
+                - |
+                  set -euo pipefail
+                  STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
+                  OUT="/backup/ldap-${STAMP}.ldif"
+                  TMP="${OUT}.partial"
+
+                  # ldapsearch -y keeps a trailing newline; the image strips it.
+                  printf '%s' "$(cat /run/secrets/{{ .Values.auth.secretKeys.adminPasswordKey }})" > /tmp/admin-password
+                  chmod 600 /tmp/admin-password
+
+                  ldapsearch \
+                    -x \
+                    -H "ldap://{{ include "openldap.fullname" . }}:{{ .Values.service.ldapPort }}" \
+                    -D "{{ include "openldap.adminDn" . }}" \
+                    -y /tmp/admin-password \
+                    -b "{{ include "openldap.baseDn" . }}" \
+                    -LLL \
+                    > "${TMP}"
+
+                  # Publish only on success, so a partial file is never mistaken
+                  # for a usable backup.
+                  mv "${TMP}" "${OUT}"
+                  echo "wrote ${OUT}"
+
+                  {{- if gt (int .Values.backup.retentionDays) 0 }}
+                  find /backup -maxdepth 1 -name '*.ldif' -type f \
+                    -mtime +{{ .Values.backup.retentionDays }} -print -delete
+                  {{- else }}
+                  echo "retentionDays=0, keeping every export"
+                  {{- end }}
+              env:
+                - name: LDAPTLS_REQCERT
+                  value: {{ .Values.replication.tlsReqCert | quote }}
+              volumeMounts:
+                - name: backup
+                  mountPath: /backup
+                - name: secrets
+                  mountPath: /run/secrets
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: backup
+              persistentVolumeClaim:
+                claimName: {{ include "openldap.fullname" . }}-backup
+            - name: secrets
+              secret:
+                secretName: {{ include "openldap.secretName" . }}
+                defaultMode: 0400
+            - name: tmp
+              emptyDir: {}
+{{- end }}

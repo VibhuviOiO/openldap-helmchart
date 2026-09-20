@@ -1,0 +1,39 @@
+{{ include "openldap.name" . }} {{ .Chart.Version }} (OpenLDAP {{ .Chart.AppVersion }})
+{{ include "openldap.fullname" . }} is deployed in namespace {{ .Release.Namespace }}.
+
+{{ if eq (include "openldap.replicationEnabled" .) "true" -}}
+{{ .Values.replicaCount }} providers. Every node accepts writes and converges
+asynchronously.
+{{- else -}}
+Single standalone provider.
+{{- end }}
+
+Connect:
+
+  ldapsearch -x -H ldap://{{ include "openldap.fullname" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}:{{ .Values.service.ldapPort }} -D "{{ include "openldap.adminDn" . }}" -W -b "{{ include "openldap.baseDn" . }}"
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "openldap.fullname" . }} {{ .Values.service.ldapPort }}:{{ .Values.service.ldapPort }}
+
+Checks:
+
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+{{ if eq (include "openldap.replicationEnabled" .) "true" -}}
+Replication:
+
+  * SERVER_ID comes from the pod ordinal; never rename a pod or move a PVC.
+  * Status of any node:
+      kubectl -n {{ .Release.Namespace }} exec {{ include "openldap.fullname" . }}-0 -- \
+        env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/{{ .Values.auth.secretKeys.adminPasswordKey }} \
+        /usr/local/bin/scripts/ldapcheck.sh \
+        --peers {{ $peers := list }}{{ range $i := until (int .Values.replicaCount) }}{{ if ne $i 0 }}{{ $peers = append $peers (printf "%s-%d.%s" (include "openldap.fullname" $) $i (include "openldap.headlessServiceName" $)) }}{{ end }}{{ end }}{{ join "," $peers }}
+{{- end }}
+
+Credentials (if the chart created the Secret):
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "openldap.secretName" . }} -o jsonpath='{.data.{{ .Values.auth.secretKeys.adminPasswordKey }}}' | base64 -d
+
+{{ if .Values.backup.enabled -}}
+Backup: online LDIF export, {{ .Values.backup.schedule }}, into the
+{{ include "openldap.fullname" . }}-backup PVC. Not crash-consistent.
+{{- end }}

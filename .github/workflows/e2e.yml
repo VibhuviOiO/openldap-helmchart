@@ -1,0 +1,151 @@
+name: e2e
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # The image and Kubernetes both move without this repo changing.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  kind:
+    name: 3 providers on kind
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.1
+
+      - uses: helm/kind-action@v1.15.0
+        with:
+          cluster_name: openldap
+
+      - name: Show the cluster
+        run: |
+          kubectl version
+          kubectl get storageclass
+          kubectl get nodes -o wide
+
+      - name: Create the credentials Secret
+        run: |
+          set -euo pipefail
+          kubectl create namespace directory
+          kubectl -n directory create secret generic ldap-auth \
+            --from-literal=admin-password='CiAdminPassword123' \
+            --from-literal=config-password='CiConfigPassword123' \
+            --from-literal=replication-password='CiReplicationPassword123'
+
+      - name: helm install (3 providers)
+        run: |
+          set -euo pipefail
+          helm install ldap . -n directory \
+            --set auth.existingSecret=ldap-auth \
+            --set features.memberOf=true \
+            --set image.pullPolicy=Always \
+            --wait --timeout 10m
+
+      - name: Every provider is Ready and its PVC is bound
+        run: |
+          set -euo pipefail
+          kubectl -n directory get pods -o wide
+          kubectl -n directory get pvc
+          ready=$(kubectl -n directory get statefulset ldap-openldap -o jsonpath='{.status.readyReplicas}')
+          [ "$ready" = "3" ] || { echo "::error::only ${ready}/3 providers Ready"; exit 1; }
+
+      - name: helm test (bind, search, contextCSN convergence)
+        run: |
+          set -euo pipefail
+          helm test ldap -n directory --timeout 5m
+          kubectl -n directory logs ldap-openldap-test-connection || true
+
+      - name: Write on ordinal 0, read from ordinal 1 and 2
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec -i ldap-openldap-0 -- \
+            env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
+            ldapadd -x -H ldap://localhost -D cn=Manager,dc=example,dc=com -y /run/secrets/admin-password <<'LDIF'
+          dn: ou=Cluster,dc=example,dc=com
+          objectClass: organizationalUnit
+          ou: Cluster
+          LDIF
+
+          for ordinal in 1 2; do
+            ok=false
+            for _ in $(seq 1 24); do
+              if kubectl -n directory exec -i "ldap-openldap-${ordinal}" -- \
+                   env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
+                   ldapsearch -x -H ldap://localhost -D cn=Manager,dc=example,dc=com \
+                     -y /run/secrets/admin-password \
+                     -b ou=Cluster,dc=example,dc=com -s base dn 2>/dev/null | grep -q '^dn:'; then
+                ok=true
+                break
+              fi
+              sleep 5
+            done
+            if [ "$ok" != true ]; then
+              echo "::error::ou=Cluster never reached ldap-openldap-${ordinal}"
+              kubectl -n directory exec ldap-openldap-0 -- \
+                env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
+                /usr/local/bin/scripts/ldapcheck.sh --peers || true
+              exit 1
+            fi
+            echo "ordinal ${ordinal} converged"
+          done
+
+      - name: ldapcheck reports no failures
+        run: |
+          set -euo pipefail
+          kubectl -n directory exec ldap-openldap-0 -- \
+            env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
+            /usr/local/bin/scripts/ldapcheck.sh --peers
+
+      - name: A deleted provider rejoins and catches up
+        run: |
+          set -euo pipefail
+          kubectl -n directory delete pod ldap-openldap-2 --wait=true
+          kubectl -n directory wait --for=condition=Ready pod/ldap-openldap-2 --timeout=5m
+
+          kubectl -n directory exec -i ldap-openldap-0 -- \
+            env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
+            ldapadd -x -H ldap://localhost -D cn=Manager,dc=example,dc=com \
+              -y /run/secrets/admin-password <<'LDIF'
+          dn: ou=AfterRestart,dc=example,dc=com
+          objectClass: organizationalUnit
+          ou: AfterRestart
+          LDIF
+
+          ok=false
+          for _ in $(seq 1 36); do
+            if kubectl -n directory exec -i ldap-openldap-2 -- \
+                 env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
+                 ldapsearch -x -H ldap://localhost -D cn=Manager,dc=example,dc=com \
+                   -y /run/secrets/admin-password \
+                   -b ou=AfterRestart,dc=example,dc=com -s base dn 2>/dev/null | grep -q '^dn:'; then
+              ok=true
+              break
+            fi
+            sleep 5
+          done
+          [ "$ok" = true ] || { echo "::error::the restarted provider never caught up"; exit 1; }
+
+      - name: Diagnostics on failure
+        if: failure()
+        run: |
+          kubectl -n directory get all,pvc -o wide || true
+          for p in $(kubectl -n directory get pods -l app.kubernetes.io/name=openldap -o name); do
+            echo "===== $p ====="
+            kubectl -n directory logs "$p" --tail=80 || true
+            kubectl -n directory describe "$p" | tail -40 || true
+          done
+
+      - name: helm uninstall
+        if: always()
+        run: helm uninstall ldap -n directory --wait || true

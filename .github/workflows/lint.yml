@@ -1,0 +1,159 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    name: helm lint and render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.1
+
+      - name: helm lint (defaults)
+        run: helm lint . --set auth.adminPassword=ci --set auth.replicationPassword=ci
+
+      # The default render only covers one branch of every conditional.
+      - name: helm lint (value permutations)
+        run: |
+          set -euo pipefail
+          common="--set auth.adminPassword=ci --set auth.replicationPassword=ci"
+
+          helm lint . $common --set replicaCount=1 --set replication.enabled=false
+
+          helm lint . --set auth.existingSecret=ldap-auth \
+            --set tls.enabled=true --set tls.existingSecret=ldap-tls \
+            --set replication.startTLS=true \
+            --set features.memberOf=true --set features.passwordPolicy=true \
+            --set features.auditLog=true --set features.disableAnonymousBind=true \
+            --set backup.enabled=true --set networkPolicy.enabled=false \
+            --set persistence.enabled=false --set tests.enabled=false
+
+          helm lint . $common --set replicaCount=5
+
+      - name: Missing credential is rejected
+        run: |
+          set -euo pipefail
+          if helm template t . --set auth.adminPassword= >/dev/null 2>&1; then
+            echo "::error::chart rendered without auth.adminPassword"
+            exit 1
+          fi
+          if helm template t . --set auth.adminPassword=ci \
+              --set auth.replicationPassword= >/dev/null 2>&1; then
+            echo "::error::chart rendered replication with no replication password"
+            exit 1
+          fi
+
+      - name: One replica is standalone
+        run: |
+          set -euo pipefail
+          # The healthcheck fails hard on replication with no olcSyncrepl, so
+          # replicaCount=1 must render standalone even with the defaults.
+          helm template t . --set auth.adminPassword=ci --set replicaCount=1 > /tmp/render-one.yaml
+          python3 - <<'PY'
+          import sys, yaml
+          docs = [d for d in yaml.safe_load_all(open("/tmp/render-one.yaml")) if d]
+          c = next(d for d in docs if d["kind"] == "StatefulSet")
+          env = {e["name"]: e.get("value") for e in c["spec"]["template"]["spec"]["containers"][0]["env"]}
+          if env.get("ENABLE_REPLICATION") != "false":
+              print("::error::replicaCount=1 rendered ENABLE_REPLICATION=%r" % env.get("ENABLE_REPLICATION"))
+              sys.exit(1)
+          if any("REPLICATION" in e["name"] for e in c["spec"]["template"]["spec"]["containers"][0]["env"]
+                 if e["name"] != "ENABLE_REPLICATION"):
+              print("::error::replicaCount=1 rendered peer configuration")
+              sys.exit(1)
+          secret = next(d for d in docs if d["kind"] == "Secret")
+          if "replication-password" in secret["stringData"]:
+              print("::error::replicaCount=1 rendered a replication password")
+              sys.exit(1)
+          print("replicaCount=1 renders as a standalone server")
+          PY
+
+          helm template t . --set auth.adminPassword=ci --set replicaCount=1 >/dev/null
+          echo "OK"
+
+      - name: Render every permutation
+        run: |
+          set -euo pipefail
+          args=("--set" "auth.adminPassword=ci" "--set" "auth.replicationPassword=ci")
+          for n in 1 2 3 5; do
+            helm template t . "${args[@]}" --set "replicaCount=$n" > "/tmp/render-$n.yaml"
+          done
+          helm template t . --set auth.existingSecret=ldap-auth \
+            --set tls.enabled=true --set tls.existingSecret=ldap-tls \
+            --set replication.startTLS=true --set features.disableAnonymousBind=true \
+            --set backup.enabled=true --set persistence.enabled=false \
+            > /tmp/render-full.yaml
+
+      - name: Validate manifests against the Kubernetes schemas
+        run: |
+          set -euo pipefail
+          for f in /tmp/render-*.yaml; do
+            echo "==> $f"
+            docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7 \
+              -strict -summary -kubernetes-version 1.30.0 < "$f"
+          done
+
+      # The StatefulSet, CronJob and test pod carry bash inside YAML.
+      - name: shellcheck the embedded entrypoint scripts
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import glob, subprocess, sys, yaml, pathlib
+
+          def scripts(path):
+              with open(path) as fh:
+                  for doc in yaml.safe_load_all(fh):
+                      if not doc or doc.get("kind") not in ("StatefulSet", "Pod", "CronJob"):
+                          continue
+                      spec = doc["spec"]
+                      if doc["kind"] == "StatefulSet":
+                          pods = [spec["template"]]
+                      elif doc["kind"] == "CronJob":
+                          pods = [spec["jobTemplate"]["spec"]["template"]]
+                      else:
+                          pods = [doc]
+                      for pod in pods:
+                          for c in pod["spec"]["containers"]:
+                              body = "\n".join(c.get("args") or [])
+                              if body.strip():
+                                  yield f'{doc["kind"]}/{doc["metadata"]["name"]}/{c["name"]}', body
+
+          failures = 0
+          paths = sorted(glob.glob("/tmp/render-*.yaml"))
+          if not paths:
+              print("no rendered manifests to check; doing nothing")
+              sys.exit(0)
+          for path in paths:
+              for name, body in scripts(path):
+                  p = pathlib.Path("/tmp/sc.sh")
+                  p.write_text("#!/bin/bash\n" + body)
+                  r = subprocess.run(["shellcheck", "-S", "error", str(p)],
+                                     capture_output=True, text=True)
+                  print(f"==> {name}: {'ok' if r.returncode == 0 else 'FAILED'}")
+                  if r.returncode != 0:
+                      failures += 1
+                      print(r.stdout + r.stderr)
+          sys.exit(1 if failures else 0)
+          PY
+
+      - name: Chart metadata is consistent
+        run: |
+          set -euo pipefail
+          api_version=$(helm show chart . | awk '/^apiVersion:/ {print $2}')
+          [ "$api_version" = "v2" ] || { echo "::error::apiVersion is $api_version"; exit 1; }
+          app_version=$(helm show chart . | awk '/^appVersion:/ {print $2}' | tr -d '"')
+          echo "appVersion=$app_version"
+          # image.tag defaults to appVersion; a typo here is ImagePullBackOff.
+          docker manifest inspect "vibhuvioio/openldap:${app_version}" >/dev/null \
+            || { echo "::error::vibhuvioio/openldap:${app_version} does not exist"; exit 1; }

@@ -1,0 +1,62 @@
+name: release
+
+# Publishes the chart to gh-pages (the `helm repo add` endpoint) and attaches the
+# .tgz to a GitHub Release. Runs only when chart inputs change.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Chart.yaml
+      - values.yaml
+      - templates/**
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: package and publish to gh-pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.1
+
+      - name: Refuse to publish an unversioned or unresolvable chart
+        run: |
+          set -euo pipefail
+          version=$(helm show chart . | awk '/^version:/ {print $2}' | tr -d '"')
+          app_version=$(helm show chart . | awk '/^appVersion:/ {print $2}' | tr -d '"')
+          if [ -z "$version" ] || [ "$version" = "0.0.0" ]; then
+            echo "::error::Chart.yaml has no usable version"; exit 1
+          fi
+          # image.tag defaults to appVersion; never publish a dangling tag.
+          docker manifest inspect "vibhuvioio/openldap:${app_version}" >/dev/null \
+            || { echo "::error::vibhuvioio/openldap:${app_version} does not exist"; exit 1; }
+          echo "publishing chart ${version} for OpenLDAP ${app_version}"
+
+      - name: helm lint before publishing
+        run: helm lint . --set auth.adminPassword=ci --set auth.replicationPassword=ci
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        with:
+          skip_existing: true
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+      - name: Published chart is installable
+        run: |
+          set -euo pipefail
+          helm repo add vibhuvioio https://VibhuviOiO.github.io/openldap-helmchart
+          helm repo update
+          helm search repo vibhuvioio/openldap --versions | head -5
+          helm template smoke vibhuvioio/openldap \
+            --set auth.adminPassword=ci --set auth.replicationPassword=ci > /dev/null

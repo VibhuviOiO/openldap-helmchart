@@ -1,0 +1,130 @@
+{{- if .Values.tests.enabled }}
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "openldap.fullname" . }}-test-connection
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+    - name: check
+      image: {{ include "openldap.image" . | quote }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities:
+          drop: ["ALL"]
+      command: ["/bin/bash", "-c"]
+      args:
+        - |
+          set -euo pipefail
+          PORT="{{ .Values.service.ldapPort }}"
+          BASE="{{ include "openldap.baseDn" . }}"
+          ADMIN="{{ include "openldap.adminDn" . }}"
+
+          # ldapsearch -y keeps a trailing newline; the image strips it.
+          printf '%s' "$(cat /run/secrets/{{ .Values.auth.secretKeys.adminPasswordKey }})" > /tmp/admin-password
+          chmod 600 /tmp/admin-password
+          PW=/tmp/admin-password
+
+          {{- if not .Values.features.disableAnonymousBind }}
+          echo "==> anonymous root DSE"
+          ldapsearch -x -H "ldap://{{ include "openldap.fullname" . }}:${PORT}" \
+            -s base -b "" namingContexts
+          {{- end }}
+
+          echo "==> authenticated search of ${BASE}"
+          ldapsearch -x -H "ldap://{{ include "openldap.fullname" . }}:${PORT}" \
+            -D "${ADMIN}" -y "${PW}" -b "${BASE}" -LLL '(objectClass=*)' dn >/dev/null
+
+          {{- if eq (include "openldap.replicationEnabled" .) "true" }}
+          # contextCSN, not cn=config: cn=config is served over ldapi:// EXTERNAL
+          # only, so a remote bind sees nothing.
+          echo "==> replication convergence across {{ .Values.replicaCount }} providers"
+          # `|| true`: an unreachable peer makes grep exit 1, which would abort
+          # this pod under set -e/pipefail with no diagnostic.
+          csn_of() {
+            ldapsearch -x -H "ldap://$1:${PORT}" -D "${ADMIN}" -y "${PW}" \
+              -b "${BASE}" -s base contextCSN 2>/dev/null \
+              | grep '^contextCSN:' | sed 's/^contextCSN: //' | sort | tr '\n' ',' || true
+          }
+
+          names=()
+          for i in $(seq 0 $(( {{ .Values.replicaCount }} - 1 ))); do
+            names+=("{{ include "openldap.fullname" . }}-${i}.{{ include "openldap.headlessServiceName" . }}")
+          done
+
+          # Convergence is eventual, so poll.
+          deadline=$(( SECONDS + {{ .Values.tests.convergenceTimeoutSeconds }} ))
+          attempt=0
+          while :; do
+            attempt=$((attempt + 1))
+            reference=""
+            reference_name=""
+            all_equal=true
+            unreachable=""
+            for n in "${names[@]}"; do
+              csn="$(csn_of "$n")"
+              if [ -z "${csn}" ]; then
+                all_equal=false
+                unreachable="${unreachable} ${n}"
+                continue
+              fi
+              if [ -z "${reference}" ]; then
+                reference="${csn}"
+                reference_name="${n}"
+              elif [ "${csn}" != "${reference}" ]; then
+                all_equal=false
+                echo "    ${n}: ${csn}  !=  ${reference} (${reference_name})"
+                break
+              fi
+            done
+            if [ "${all_equal}" = true ]; then
+              echo "    all {{ .Values.replicaCount }} providers converged at ${reference}"
+              break
+            fi
+            if [ -n "${unreachable}" ]; then
+              echo "    attempt ${attempt}: no contextCSN from${unreachable}"
+            fi
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "FAIL: providers not converged within {{ .Values.tests.convergenceTimeoutSeconds }}s" >&2
+              if [ -n "${unreachable}" ]; then
+                echo "      no contextCSN from:${unreachable}" >&2
+                echo "      check the headless Service and that every pod is Ready" >&2
+              else
+                echo "      providers disagree on contextCSN; run:" >&2
+                echo "      kubectl -n <ns> exec {{ include "openldap.fullname" . }}-0 -- \\" >&2
+                echo "        env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/{{ .Values.auth.secretKeys.adminPasswordKey }} \\" >&2
+                echo "        /usr/local/bin/scripts/ldapcheck.sh --peers" >&2
+              fi
+              exit 1
+            fi
+            sleep 5
+          done
+          {{- end }}
+
+          echo "PASS"
+      volumeMounts:
+        - name: secrets
+          mountPath: /run/secrets
+          readOnly: true
+        - name: tmp
+          mountPath: /tmp
+  volumes:
+    - name: secrets
+      secret:
+        secretName: {{ include "openldap.secretName" . }}
+        defaultMode: 0400
+    - name: tmp
+      emptyDir: {}
+{{- end }}

@@ -1,0 +1,38 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "openldap.fullname" . }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "openldap.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    # Providers reaching each other, and the probes.
+    - from:
+        - podSelector:
+            matchLabels:
+              {{- include "openldap.selectorLabels" . | nindent 14 }}
+      ports:
+        - port: ldap
+          protocol: TCP
+        {{- if .Values.tls.enabled }}
+        - port: ldaps
+          protocol: TCP
+        {{- end }}
+    {{- with .Values.networkPolicy.ingressFrom }}
+    - from:
+        {{- toYaml . | nindent 8 }}
+      ports:
+        - port: ldap
+          protocol: TCP
+        {{- if $.Values.tls.enabled }}
+        - port: ldaps
+          protocol: TCP
+        {{- end }}
+    {{- end }}
+{{- end }}

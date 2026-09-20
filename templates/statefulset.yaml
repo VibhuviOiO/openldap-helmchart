@@ -1,0 +1,254 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "openldap.fullname" . }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  # StatefulSet, not Deployment: replication embeds pod names in olcServerID.
+  serviceName: {{ include "openldap.headlessServiceName" . }}
+  replicas: {{ .Values.replicaCount }}
+  # Providers must come up together; ordinal 0 may itself need a peer.
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels:
+      {{- include "openldap.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "openldap.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "openldap.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: openldap
+          image: {{ include "openldap.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+
+              # Unique SERVER_ID per node; the image refuses a defaulted one.
+              ORDINAL="${HOSTNAME##*-}"
+              export SERVER_ID=$((ORDINAL + 1))
+
+              {{- if eq (include "openldap.replicationEnabled" .) "true" }}
+              # Peers and the full SID->URL map, from per-pod DNS.
+              HEADLESS="{{ include "openldap.headlessServiceName" . }}.{{ .Release.Namespace }}.svc.{{ .Values.clusterDomain }}"
+              PEERS=""
+              SIDS=""
+              for i in $(seq 0 $(( {{ .Values.replicaCount }} - 1 ))); do
+                NAME="{{ include "openldap.fullname" . }}-${i}"
+                URL="ldap://${NAME}.${HEADLESS}:{{ .Values.service.ldapPort }}"
+                SIDS="${SIDS}${SIDS:+,}$((i + 1))=${URL}"
+                if [ "$i" != "$ORDINAL" ]; then
+                  PEERS="${PEERS}${PEERS:+,}${NAME}.${HEADLESS}"
+                fi
+              done
+              export REPLICATION_PEERS="$PEERS"
+              export REPLICATION_SERVER_IDS="$SIDS"
+              {{- end }}
+
+              exec /usr/local/bin/startup.sh
+          ports:
+            - name: ldap
+              containerPort: 389
+              protocol: TCP
+            {{- if .Values.tls.enabled }}
+            - name: ldaps
+              containerPort: 636
+              protocol: TCP
+            {{- end }}
+          env:
+            - name: LDAP_DOMAIN
+              value: {{ .Values.ldap.domain | quote }}
+            - name: LDAP_ORGANIZATION
+              value: {{ .Values.ldap.organization | quote }}
+            # Secrets via files; env values show up in `kubectl describe pod`.
+            - name: LDAP_ADMIN_PASSWORD_FILE
+              value: /run/secrets/{{ .Values.auth.secretKeys.adminPasswordKey }}
+            - name: LDAP_CONFIG_PASSWORD_FILE
+              value: /run/secrets/{{ .Values.auth.secretKeys.configPasswordKey }}
+            - name: ENABLE_REPLICATION
+              value: {{ include "openldap.replicationEnabled" . | quote }}
+            {{- if eq (include "openldap.replicationEnabled" .) "true" }}
+            - name: LDAP_REPLICATION_PASSWORD_FILE
+              value: /run/secrets/{{ .Values.auth.secretKeys.replicationPasswordKey }}
+            {{- if .Values.replication.startTLS }}
+            - name: LDAP_REPLICATION_STARTTLS
+              value: "critical"
+            {{- end }}
+            - name: LDAP_REPLICATION_TLS_REQCERT
+              value: {{ .Values.replication.tlsReqCert | quote }}
+            {{- end }}
+            - name: ENABLE_MEMBEROF
+              value: {{ .Values.features.memberOf | quote }}
+            - name: ENABLE_PASSWORD_POLICY
+              value: {{ .Values.features.passwordPolicy | quote }}
+            - name: ENABLE_AUDIT_LOG
+              value: {{ .Values.features.auditLog | quote }}
+            - name: ENABLE_MONITORING
+              value: {{ .Values.features.monitoring | quote }}
+            - name: LDAP_DISABLE_ANONYMOUS_BIND
+              value: {{ .Values.features.disableAnonymousBind | quote }}
+            - name: INCLUDE_SCHEMAS
+              value: {{ .Values.features.includeSchemas | quote }}
+            - name: LDAP_THREADS
+              value: {{ .Values.config.threads | quote }}
+            - name: LDAP_PASSWORD_HASH
+              value: {{ .Values.config.passwordHash | quote }}
+            - name: LDAP_QUERY_SIZE_SOFT
+              value: {{ .Values.config.querySizeSoft | quote }}
+            - name: LDAP_QUERY_SIZE_HARD
+              value: {{ .Values.config.querySizeHard | quote }}
+            - name: LDAP_CONN_MAX_PENDING
+              value: {{ .Values.config.connMaxPending | quote }}
+            - name: LDAP_CONN_MAX_PENDING_AUTH
+              value: {{ .Values.config.connMaxPendingAuth | quote }}
+            - name: LDAP_READ_ACCESS_SUBJECT
+              value: {{ .Values.config.readAccessSubject | quote }}
+            {{- if .Values.config.logLevel }}
+            - name: LDAP_LOG_LEVEL
+              value: {{ .Values.config.logLevel | quote }}
+            {{- end }}
+            {{- if .Values.tls.enabled }}
+            - name: LDAP_TLS_CERT
+              value: {{ .Values.tls.certPath | quote }}
+            - name: LDAP_TLS_KEY
+              value: {{ .Values.tls.keyPath | quote }}
+            {{- if .Values.tls.caPath }}
+            - name: LDAP_TLS_CA
+              value: {{ .Values.tls.caPath | quote }}
+            {{- end }}
+            - name: LDAP_TLS_VERIFY_CLIENT
+              value: {{ .Values.tls.verifyClient | quote }}
+            - name: LDAP_TLS_PROTOCOL_MIN
+              value: {{ .Values.tls.protocolMin | quote }}
+            {{- end }}
+          # "auto" is a local check only: a peer being down never restarts a
+          # healthy pod.
+          startupProbe:
+            exec:
+              command: ["/usr/local/bin/scripts/healthcheck.sh", "auto"]
+            failureThreshold: {{ .Values.probes.startup.failureThreshold }}
+            periodSeconds: {{ .Values.probes.startup.periodSeconds }}
+          readinessProbe:
+            exec:
+              command: ["/usr/local/bin/scripts/healthcheck.sh", "auto"]
+            periodSeconds: {{ .Values.probes.readiness.periodSeconds }}
+          livenessProbe:
+            exec:
+              command: ["/usr/local/bin/scripts/healthcheck.sh", "auto"]
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.probes.liveness.periodSeconds }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/ldap
+            - name: config
+              mountPath: /etc/openldap/slapd.d
+            - name: logs
+              mountPath: /logs
+            - name: secrets
+              mountPath: /run/secrets
+              readOnly: true
+            {{- if .Values.tls.enabled }}
+            - name: certs
+              mountPath: {{ .Values.tls.certPath | dir }}
+              readOnly: true
+            {{- end }}
+      volumes:
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        - name: config
+          emptyDir: {}
+        - name: logs
+          emptyDir: {}
+        {{- end }}
+        - name: secrets
+          secret:
+            secretName: {{ include "openldap.secretName" . }}
+            defaultMode: 0400
+        {{- if .Values.tls.enabled }}
+        - name: certs
+          secret:
+            secretName: {{ required "tls.existingSecret is required when tls.enabled=true" .Values.tls.existingSecret }}
+            defaultMode: 0400
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+  {{- if .Values.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "openldap.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.data.accessModes | nindent 10 }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.data.size }}
+    - metadata:
+        name: config
+        labels:
+          {{- include "openldap.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.config.accessModes | nindent 10 }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.config.size }}
+    - metadata:
+        name: logs
+        labels:
+          {{- include "openldap.selectorLabels" . | nindent 10 }}
+      spec:
+        accessModes:
+          {{- toYaml .Values.persistence.logs.accessModes | nindent 10 }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.logs.size }}
+  {{- end }}

@@ -1,0 +1,27 @@
+apiVersion: v2
+name: openldap
+description: Production OpenLDAP with multi-provider replication, overlays and TLS (vibhuvioio/openldap)
+type: application
+version: 0.1.0
+appVersion: "2.6.10"
+kubeVersion: ">=1.24.0-0"
+keywords:
+  - ldap
+  - openldap
+  - directory
+  - identity
+  - replication
+  - high-availability
+home: https://vibhuvioio.com/openldap-docker/
+sources:
+  - https://github.com/VibhuviOiO/openldap-helmchart
+  - https://github.com/VibhuviOiO/openldap-docker
+maintainers:
+  - name: Jinna Baalu
+    url: https://github.com/VibhuviOiO
+annotations:
+  artifacthub.io/license: MIT
+  # Artifact Hub requires kind/description pairs here; a bare list is rejected.
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial chart - StatefulSet, per-pod PVCs, multi-provider replication

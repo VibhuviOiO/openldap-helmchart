@@ -1,0 +1,24 @@
+{{/* Stable per-pod DNS for replication; a Deployment cannot provide this. */}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "openldap.headlessServiceName" . }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  # Peers must resolve providers that are still initialising.
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "openldap.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: ldap
+      port: {{ .Values.service.ldapPort }}
+      targetPort: ldap
+      protocol: TCP
+    {{- if .Values.tls.enabled }}
+    - name: ldaps
+      port: {{ .Values.service.ldapsPort }}
+      targetPort: ldaps
+      protocol: TCP
+    {{- end }}
