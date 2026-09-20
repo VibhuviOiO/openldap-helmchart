@@ -4,7 +4,7 @@ description: Production OpenLDAP with multi-provider replication, overlays and T
 type: application
 # version tracks appVersion, the way the image tag tracks the OpenLDAP version.
 # A chart-only fix for the same OpenLDAP version appends -N: 2.6.10-1, 2.6.10-2.
-version: 2.6.10
+version: 2.6.10-1
 appVersion: "2.6.10"
 kubeVersion: ">=1.24.0-0"
 # Square, vector, and already yours.
