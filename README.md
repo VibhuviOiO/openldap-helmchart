@@ -36,12 +36,13 @@ kubectl -n directory create secret generic ldap-auth \
 helm install ldap . -n directory --set auth.existingSecret=ldap-auth
 ```
 
-Once `release.yml` has published to gh-pages:
+From the published repository:
 
 ```bash
 helm repo add vibhuvioio https://VibhuviOiO.github.io/openldap-helmchart
 helm repo update
-helm install ldap vibhuvioio/openldap -n directory --set auth.existingSecret=ldap-auth
+helm install ldap vibhuvioio/openldap -n directory \
+  --version 2.6.10 --set auth.existingSecret=ldap-auth
 ```
 
 Generated passwords are not an option: Helm regenerates them on every upgrade, and the peers
@@ -57,6 +58,88 @@ Verify:
 ```bash
 helm test ldap -n directory
 ```
+
+## Release
+
+The chart version tracks the OpenLDAP version, the way the image tag does. `Chart.yaml`
+`version`, `appVersion` and the git tag are all the same number, so one tag releases both
+artefacts under one identity:
+
+```bash
+# Chart.yaml: version: 2.6.10, appVersion: "2.6.10"
+git tag v2.6.10
+git push origin v2.6.10
+```
+
+That runs `release.yml`, which refuses to publish unless the tag, `version` and `appVersion`
+agree **and** `vibhuvioio/openldap:<appVersion>` exists on Docker Hub. It then packages the
+chart, rebuilds `index.yaml` on the `gh-pages` branch, and creates a GitHub Release with the
+`.tgz` attached.
+
+A chart-only fix for the same OpenLDAP version appends a counter:
+
+```bash
+# Chart.yaml: version: 2.6.10-1, appVersion: "2.6.10"
+git tag v2.6.10-1 && git push origin v2.6.10-1
+```
+
+Merging to `main` does not publish — it runs `lint` and `e2e`. Only a tag releases.
+
+### One-time setup
+
+`gh-pages` has to exist and Pages has to be on before the first tag, or the release will
+publish and then fail its own verification step:
+
+```bash
+git checkout --orphan gh-pages
+git rm -rf . >/dev/null 2>&1
+git commit --allow-empty -m "chore: init gh-pages"
+git push origin gh-pages
+git checkout main
+```
+
+Then Settings → Pages → Source = *Deploy from a branch*, branch `gh-pages`, folder `/`.
+Settings → Actions → General → Workflow permissions must be *Read and write*.
+
+### Register with the Helm registry
+
+`gh-pages` is the repository; [Artifact Hub](https://artifacthub.io) is the registry people
+search.
+
+Artifact Hub **repository names are globally unique**, and `openldap` is already taken (by
+`danilonicioka/openldap`), as are `helm-openldap` and `symas-openldap`. The chart *name* stays
+`openldap`, so the install path is unchanged — only the repository display name has to be
+yours:
+
+1. Sign in at <https://artifacthub.io> with GitHub.
+2. **Add repository** → Kind **Helm charts** → Name `vibhuvioio` → URL
+   `https://VibhuviOiO.github.io/openldap-helmchart`.
+3. Artifact Hub reads the `artifacthub.io/*` annotations in `Chart.yaml` and indexes every
+   future release automatically.
+
+`vibhuvioio` (rather than `vibhuvioio-openldap`) because one Artifact Hub repository can hold
+every chart you publish, and the name matches the `helm repo add vibhuvioio` alias.
+
+The repository page becomes `artifacthub.io/packages/helm/vibhuvioio/openldap`, while
+`helm install vibhuvioio/openldap` keeps working unchanged.
+
+For the **Verified publisher** badge, add a `vibhuvioio.com` TXT/well-known proof in the
+Artifact Hub control panel — that badge is what makes the listing look authoritative.
+
+For an OCI alternative (some tooling prefers it), GitHub Container Registry accepts Helm
+charts. Add to `release.yml` if you want it mirrored:
+
+```bash
+helm registry login ghcr.io -u "$GITHUB_ACTOR" --password "$GITHUB_TOKEN"
+helm push openldap-2.6.10.tgz oci://ghcr.io/vibhuvioio/charts
+helm install ldap oci://ghcr.io/vibhuvioio/charts/openldap --version 2.6.10
+```
+
+Docker Hub does not serve Helm charts, so `gh-pages` plus Artifact Hub is the primary path.
+
+**Both Artifact Hub and `helm repo add` need this repository to be public.** GitHub Pages
+from a private repository requires a paid plan, and Artifact Hub cannot read a private URL,
+so set the chart repo to Public before tagging.
 
 ## Architecture
 

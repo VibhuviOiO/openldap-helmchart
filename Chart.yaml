@@ -2,7 +2,9 @@ apiVersion: v2
 name: openldap
 description: Production OpenLDAP with multi-provider replication, overlays and TLS (vibhuvioio/openldap)
 type: application
-version: 0.1.0
+# version tracks appVersion, the way the image tag tracks the OpenLDAP version.
+# A chart-only fix for the same OpenLDAP version appends -N: 2.6.10-1, 2.6.10-2.
+version: 2.6.10
 appVersion: "2.6.10"
 kubeVersion: ">=1.24.0-0"
 keywords:
@@ -21,7 +23,15 @@ maintainers:
     url: https://github.com/VibhuviOiO
 annotations:
   artifacthub.io/license: MIT
+  artifacthub.io/images: |
+    - name: openldap
+      image: vibhuvioio/openldap:2.6.10
   # Artifact Hub requires kind/description pairs here; a bare list is rejected.
   artifacthub.io/changes: |
     - kind: added
       description: Initial chart - StatefulSet, per-pod PVCs, multi-provider replication
+  artifacthub.io/links: |
+    - name: Docker image
+      url: https://hub.docker.com/r/vibhuvioio/openldap
+    - name: Image source
+      url: https://github.com/VibhuviOiO/openldap-docker
