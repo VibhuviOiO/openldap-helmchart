@@ -4,7 +4,7 @@ Runs [`vibhuvioio/openldap`](https://hub.docker.com/r/vibhuvioio/openldap) on Ku
 multi-provider (N-way multi-master) OpenLDAP cluster: a StatefulSet of providers that all
 accept writes and converge on `contextCSN`.
 
-- Chart version and `appVersion` both track the OpenLDAP version in the image.
+- `appVersion` is the OpenLDAP version; the chart version is independent.
 - Per-pod PersistentVolumeClaims for data, `cn=config` and logs.
 - Optional TLS, `memberof`, `ppolicy`, `auditlog`, `cn=Monitor` and scheduled LDIF exports.
 
@@ -290,9 +290,8 @@ attribute.
 
 **Backups are online.** See [Operations](#operations).
 
-**The image tag is the OpenLDAP version.** A chart release that only fixes the chart does not
-change the image. `appVersion` records which OpenLDAP the chart expects, and the release
-workflow refuses to publish unless that image exists on Docker Hub.
+**The image tag is the OpenLDAP version.** Pin it with `--version` on the chart and let
+`appVersion` tell you which OpenLDAP you are getting; the two numbers are not the same.
 
 ## Troubleshooting
 
