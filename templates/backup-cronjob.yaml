@@ -40,6 +40,11 @@ spec:
           securityContext:
             runAsNonRoot: true
             runAsUser: 65534
+            # Without fsGroup the kubelet does not make the PVC writable by a
+            # non-root user, so the export fails with "Permission denied" on
+            # most provisioners.
+            fsGroup: 65534
+            fsGroupChangePolicy: OnRootMismatch
             seccompProfile:
               type: RuntimeDefault
           containers:

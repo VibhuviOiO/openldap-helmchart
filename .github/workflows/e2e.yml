@@ -18,9 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.17.1
 
@@ -106,6 +106,67 @@ jobs:
           kubectl -n directory exec ldap-openldap-0 -- \
             env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
             /usr/local/bin/scripts/ldapcheck.sh --peers
+
+      - name: In-place upgrade keeps the data
+        run: |
+          set -euo pipefail
+          # --wait rolls the StatefulSet without ever dropping below the
+          # PodDisruptionBudget, so this also exercises the PDB.
+          helm upgrade ldap . -n directory \
+            --set auth.existingSecret=ldap-auth \
+            --set image.pullPolicy=Always \
+            --set features.memberOf=true \
+            --set backup.enabled=true \
+            --wait --timeout 10m
+
+          ready=$(kubectl -n directory get statefulset ldap-openldap -o jsonpath='{.status.readyReplicas}')
+          [ "$ready" = "3" ] || { echo "::error::only ${ready}/3 Ready after upgrade"; exit 1; }
+
+          # The entry written before the upgrade must have survived it.
+          kubectl -n directory exec ldap-openldap-0 -- \
+            env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
+            ldapsearch -x -H ldap://localhost -D cn=Manager,dc=example,dc=com \
+              -y /run/secrets/admin-password \
+              -b ou=Cluster,dc=example,dc=com -s base dn | grep -q '^dn:'
+          echo "upgrade preserved the data"
+
+      - name: Backup CronJob writes an export
+        run: |
+          set -euo pipefail
+          kubectl -n directory create job backup-check --from=cronjob/ldap-openldap-backup
+          kubectl -n directory wait --for=condition=complete job/backup-check --timeout=5m
+          kubectl -n directory logs job/backup-check
+
+      - name: TLS install (standalone, ldaps + anonymous bind disabled)
+        run: |
+          set -euo pipefail
+          kubectl create namespace tls
+          kubectl -n tls create secret generic ldap-auth \
+            --from-literal=admin-password='CiAdminPassword123' \
+            --from-literal=config-password='CiConfigPassword123'
+
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj "/CN=ldap" \
+            -keyout /tmp/tls.key -out /tmp/tls.crt 2>/dev/null
+          kubectl -n tls create secret tls ldap-tls --cert=/tmp/tls.crt --key=/tmp/tls.key
+
+          # disableAnonymousBind exercises the ldapi:// EXTERNAL fallback in the
+          # probes; tls.enabled makes check_tls part of every probe.
+          helm install ldaptls . -n tls \
+            --set replicaCount=1 \
+            --set auth.existingSecret=ldap-auth \
+            --set tls.enabled=true --set tls.existingSecret=ldap-tls \
+            --set features.disableAnonymousBind=true \
+            --wait --timeout 10m
+
+          kubectl -n tls get pods
+          kubectl -n tls exec ldaptls-openldap-0 -- \
+            env LDAPTLS_REQCERT=never \
+            ldapsearch -x -H ldaps://localhost:636 \
+              -D cn=Manager,dc=example,dc=com -y /run/secrets/admin-password \
+              -b dc=example,dc=com -s base dn | grep -q '^dn:'
+          echo "ldaps bind works"
+
+          helm uninstall ldaptls -n tls --wait
 
       - name: A deleted provider rejoins and catches up
         run: |

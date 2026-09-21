@@ -1,57 +1,47 @@
-# openldap-helmchart
+# openldap
 
-A Helm chart for running the [`vibhuvioio/openldap`](https://hub.docker.com/r/vibhuvioio/openldap)
-image on Kubernetes as a multi-provider (N-way multi-master) OpenLDAP cluster.
+Runs [`vibhuvioio/openldap`](https://hub.docker.com/r/vibhuvioio/openldap) on Kubernetes as a
+multi-provider (N-way multi-master) OpenLDAP cluster: a StatefulSet of providers that all
+accept writes and converge on `contextCSN`.
 
-Requires Kubernetes >= 1.24 and Helm 3.
+- Chart version and `appVersion` both track the OpenLDAP version in the image.
+- Per-pod PersistentVolumeClaims for data, `cn=config` and logs.
+- Optional TLS, `memberof`, `ppolicy`, `auditlog`, `cn=Monitor` and scheduled LDIF exports.
 
-**Why a separate repository.** The image repo builds and tests a container; this repo owns
-everything about deploying it. Chart `version` is chart semver, `appVersion` is the OpenLDAP
-version in the image, so the two release cadences are independent. Keep one
-`docker-compose.yml` in the image repo for people who just want `docker run`; do not add
-compose variants, Swarm files or Kubernetes manifests there.
+## Requirements
 
-| | Image repo (`openldap-docker`) | This repo (`openldap-helmchart`) |
-|---|---|---|
-| Versioning | Image tag = installed OpenLDAP version | `version` = chart semver, `appVersion` = OpenLDAP version |
-| Consumers | `docker run`, `docker compose` | `helm install` |
-| CI | build, lint, integration tests | `helm lint`, `helm template`, `kubeconform`, kind e2e |
+| | |
+|---|---|
+| Kubernetes | >= 1.24 |
+| Helm | 3 |
+| Storage | a StorageClass with `volumeBindingMode: WaitForFirstConsumer` |
 
 ## Install
 
-Until the first release is published, install from a clone:
+```bash
+helm repo add vibhuvioio https://VibhuviOiO.github.io/openldap-helmchart
+helm repo update
+```
+
+Create the credentials first. The chart never generates passwords: Helm would regenerate them
+on every upgrade, and the providers would stop sharing a replication credential.
 
 ```bash
-git clone https://github.com/VibhuviOiO/openldap-helmchart
-cd openldap-helmchart
-
 kubectl create namespace directory
 
-# Create the credentials yourself; the chart never generates passwords.
 kubectl -n directory create secret generic ldap-auth \
   --from-literal=admin-password="$(openssl rand -base64 24)" \
   --from-literal=config-password="$(openssl rand -base64 24)" \
   --from-literal=replication-password="$(openssl rand -base64 24)"
 
-helm install ldap . -n directory --set auth.existingSecret=ldap-auth
+helm install ldap vibhuvioio/openldap \
+  --namespace directory \
+  --version 1.0.0 \
+  --set auth.existingSecret=ldap-auth
 ```
 
-From the published repository:
-
-```bash
-helm repo add vibhuvioio https://VibhuviOiO.github.io/openldap-helmchart
-helm repo update
-helm install ldap vibhuvioio/openldap -n directory \
-  --version 2.6.10 --set auth.existingSecret=ldap-auth
-```
-
-Generated passwords are not an option: Helm regenerates them on every upgrade, and the peers
-stop sharing a bind credential the moment one changes.
-
-`kubectl create secret --from-file` and `echo pw > file` both leave a **trailing newline**.
-The image strips CR/LF before hashing the password, and so do the chart's own jobs, so either
-form works — but a client you write yourself must strip it too, or binds fail with
-`Invalid credentials (49)`.
+Or skip the Secret and set the passwords as values (`auth.adminPassword`,
+`auth.replicationPassword`) — simpler for a lab, weaker for anything else.
 
 Verify:
 
@@ -59,289 +49,268 @@ Verify:
 helm test ldap -n directory
 ```
 
-## Release
-
-The chart version tracks the OpenLDAP version, the way the image tag does. `Chart.yaml`
-`version`, `appVersion` and the git tag are all the same number, so one tag releases both
-artefacts under one identity:
+## Connect
 
 ```bash
-# Chart.yaml: version: 2.6.10, appVersion: "2.6.10"
-git tag v2.6.10
-git push origin v2.6.10
+kubectl -n directory port-forward svc/ldap-openldap 389:389
+ldapsearch -x -H ldap://localhost:389 \
+  -D "cn=Manager,dc=example,dc=com" -W \
+  -b "dc=example,dc=com"
 ```
 
-That runs `release.yml`, which refuses to publish unless the tag, `version` and `appVersion`
-agree **and** `vibhuvioio/openldap:<appVersion>` exists on Docker Hub. It then packages the
-chart, rebuilds `index.yaml` on the `gh-pages` branch, and creates a GitHub Release with the
-`.tgz` attached.
+In-cluster, use `ldap-openldap.directory.svc.cluster.local:389`, or
+`ldaps://…:636` when `tls.enabled=true`.
 
-A chart-only fix for the same OpenLDAP version appends a counter:
+The root DN is always `cn=Manager,<base DN>`; the image does not make it configurable.
 
-```bash
-# Chart.yaml: version: 2.6.10-1, appVersion: "2.6.10"
-git tag v2.6.10-1 && git push origin v2.6.10-1
-```
+## Configuration
 
-Merging to `main` does not publish — it runs `lint` and `e2e`. Only a tag releases.
+### General
 
-### One-time setup
-
-`gh-pages` has to exist and Pages has to be on before the first tag, or the release will
-publish and then fail its own verification step:
-
-```bash
-git checkout --orphan gh-pages
-git rm -rf . >/dev/null 2>&1
-git commit --allow-empty -m "chore: init gh-pages"
-git push origin gh-pages
-git checkout main
-```
-
-Then Settings → Pages → Source = *Deploy from a branch*, branch `gh-pages`, folder `/`.
-Settings → Actions → General → Workflow permissions must be *Read and write*.
-
-### Register with the Helm registry
-
-`gh-pages` is the repository; [Artifact Hub](https://artifacthub.io) is the registry people
-search.
-
-Artifact Hub **repository names are globally unique**, and `openldap` is already taken (by
-`danilonicioka/openldap`), as are `helm-openldap` and `symas-openldap`. The chart *name* stays
-`openldap`, so the install path is unchanged — only the repository display name has to be
-yours:
-
-1. Sign in at <https://artifacthub.io> with GitHub.
-2. **Add repository** → Kind **Helm charts** → Name `vibhuvioio` → URL
-   `https://VibhuviOiO.github.io/openldap-helmchart`.
-3. Artifact Hub reads the `artifacthub.io/*` annotations in `Chart.yaml` and indexes every
-   future release automatically.
-
-`vibhuvioio` (rather than `vibhuvioio-openldap`) because one Artifact Hub repository can hold
-every chart you publish, and the name matches the `helm repo add vibhuvioio` alias.
-
-The repository name is only your **publisher namespace** — it does not affect search. Artifact
-Hub matches on the chart name and keywords, which is why the leading OpenLDAP chart
-(`openldap`) appears under repositories called `helm-openldap`, `symas-openldap`,
-`kubelauncher` and `nxest` alike. Keep `name: openldap`.
-
-| field | value | why it matters for search |
+| Key | Default | Description |
 |---|---|---|
-| `name` | `openldap` | what a search for `openldap` matches; `open-ldap` matches **nothing** |
-| `keywords` | `ldap`, `openldap`, `slapd`, … | secondary match |
-| `artifacthub.io/category` | `database` | the shelf Artifact Hub browses by |
-| `description` | first line of `Chart.yaml` | shown in the result list |
+| `replicaCount` | `3` | Number of providers. `1` runs standalone and forces replication off. |
+| `clusterDomain` | `cluster.local` | Cluster DNS domain, used to build the replication URLs. |
+| `nameOverride` | `""` | Override the chart name. |
+| `fullnameOverride` | `""` | Override the generated resource names. |
+| `image.repository` | `vibhuvioio/openldap` | Docker Hub is primary, `ghcr.io/vibhuvioio/openldap` is a mirror. |
+| `image.tag` | `""` | Defaults to `appVersion`, which is the OpenLDAP version. |
+| `image.pullPolicy` | `IfNotPresent` | |
+| `imagePullSecrets` | `[]` | |
+| `terminationGracePeriodSeconds` | `30` | Shorter values force a full database scan on the next start. |
+| `podAnnotations`, `podLabels` | `{}` | |
+| `nodeSelector`, `tolerations`, `affinity`, `topologySpreadConstraints` | empty | |
 
-The repository page becomes `artifacthub.io/packages/helm/vibhuvioio/openldap`, while
-`helm install vibhuvioio/openldap` keeps working unchanged.
+### Directory
 
-For the **Verified publisher** badge, add a `vibhuvioio.com` TXT/well-known proof in the
-Artifact Hub control panel — that badge is what makes the listing look authoritative.
-
-For an OCI alternative (some tooling prefers it), GitHub Container Registry accepts Helm
-charts. Add to `release.yml` if you want it mirrored:
-
-```bash
-helm registry login ghcr.io -u "$GITHUB_ACTOR" --password "$GITHUB_TOKEN"
-helm push openldap-2.6.10.tgz oci://ghcr.io/vibhuvioio/charts
-helm install ldap oci://ghcr.io/vibhuvioio/charts/openldap --version 2.6.10
-```
-
-Docker Hub does not serve Helm charts, so `gh-pages` plus Artifact Hub is the primary path.
-
-**Both Artifact Hub and `helm repo add` need this repository to be public.** GitHub Pages
-from a private repository requires a paid plan, and Artifact Hub cannot read a private URL,
-so set the chart repo to Public before tagging.
-
-## Architecture
-
-A `StatefulSet`, never a `Deployment`: replication embeds pod names in `olcServerID` URLs and
-`REPLICATION_PEERS`, and each pod derives `SERVER_ID` from its own ordinal. Random pod names
-break provider identity on every rollout and can leave a node replicating from itself.
-
-```
-StatefulSet <release>-openldap  (replicas: N, podManagementPolicy: Parallel)
-├── <release>-openldap-0   SERVER_ID=1   ─┐
-├── <release>-openldap-1   SERVER_ID=2    ├─ mesh, converges on contextCSN
-└── <release>-openldap-2   SERVER_ID=3   ─┘
-        │
-        ├── Service <release>-openldap           ClusterIP, for clients
-        └── Service <release>-openldap-headless  headless, per-pod DNS + peers
-```
-
-`podManagementPolicy: Parallel` because the providers must come up together; ordinal 0 may
-itself need a peer.
-
-`replicaCount=1` is standalone: the chart forces `ENABLE_REPLICATION=false` whatever
-`replication.enabled` says, and no replication password is required.
-
-The container command derives, per pod:
-
-```bash
-ORDINAL="${HOSTNAME##*-}"
-export SERVER_ID=$((ORDINAL + 1))
-export REPLICATION_PEERS="<release>-openldap-{0..N-1}.<release>-openldap-headless"   # minus self
-export REPLICATION_SERVER_IDS="1=ldap://…,2=ldap://…,3=ldap://…"
-exec /usr/local/bin/startup.sh
-```
-
-## Storage
-
-Three `volumeClaimTemplates` per pod: `data` (`/var/lib/ldap`), `config`
-(`/etc/openldap/slapd.d`), `logs` (`/logs`).
-
-1. Never share a PVC between replicas. LMDB is single-writer.
-2. `slapd.d` must be per-pod and writable; `startup.sh` writes the whole configuration there.
-3. `storageClass` needs `volumeBindingMode: WaitForFirstConsumer`, or cloud block storage can
-   bind a volume in the wrong zone.
-4. `data` must exceed `olcDbMaxSize`, hardcoded to 1 GiB in the image. Default is 5 GiB.
-5. `fsGroup` is unnecessary: the image starts as root, chowns the volumes, then runs `slapd`
-   as uid 55.
-
-## Values
-
-`values.yaml` is authoritative and carries the reasoning inline. The most used:
-
-| Key | Default | Notes |
+| Key | Default | Description |
 |---|---|---|
-| `replicaCount` | `3` | Providers. `1` = standalone. |
-| `auth.existingSecret` | `""` | Preferred over inline passwords. |
-| `auth.adminPassword` / `replicationPassword` | `""` | Required when `existingSecret` is empty. |
-| `ldap.domain` / `organization` | `example.com` / `Example Organization` | |
-| `replication.enabled` / `startTLS` | `true` / `false` | StartTLS needs `tls.enabled`. |
-| `features.memberOf` / `passwordPolicy` / `auditLog` | `false` | Overlays. |
+| `ldap.domain` | `example.com` | Becomes the base DN `dc=example,dc=com`. |
+| `ldap.organization` | `Example Organization` | `o=` on the base entry. |
+| `ldap.baseDn` | `""` | Empty derives it from `ldap.domain`, as the image does. |
+| `auth.existingSecret` | `""` | Secret holding the passwords. Preferred. |
+| `auth.adminPassword` | `""` | Required when `existingSecret` is empty. |
+| `auth.configPassword` | `""` | Defaults to the admin password. |
+| `auth.replicationPassword` | `""` | Required when replication is on; enables the least-privilege `cn=replicator` account. |
+| `auth.secretKeys.adminPasswordKey` | `admin-password` | |
+| `auth.secretKeys.configPasswordKey` | `config-password` | |
+| `auth.secretKeys.replicationPasswordKey` | `replication-password` | |
+
+### Replication
+
+| Key | Default | Description |
+|---|---|---|
+| `replication.enabled` | `true` | Needs more than one replica to do anything. |
+| `replication.startTLS` | `false` | StartTLS on the replication link. Needs `tls.enabled`. |
+| `replication.tlsReqCert` | `demand` | `never`, `allow`, `try` or `demand`. |
+
+### Features
+
+| Key | Default | Description |
+|---|---|---|
+| `features.memberOf` | `false` | `memberof` overlay. |
+| `features.passwordPolicy` | `false` | `ppolicy` overlay. |
+| `features.auditLog` | `false` | `auditlog` overlay. |
 | `features.monitoring` | `true` | `cn=Monitor` backend. |
-| `tls.enabled` / `existingSecret` | `false` / `""` | Bring your own certificate. |
-| `persistence.*` | data 5Gi, config 1Gi, logs 1Gi | `ReadWriteOnce`. |
-| `networkPolicy.ingressFrom` | `[]` | Raw NetworkPolicy `from:` items for clients. |
-| `backup.enabled` | `false` | Online LDIF export CronJob. |
+| `features.disableAnonymousBind` | `false` | Probes keep working over `ldapi://` EXTERNAL. |
+| `features.includeSchemas` | `cosine,inetorgperson,nis` | Comma-separated built-in schemas. |
+
+### TLS
+
+| Key | Default | Description |
+|---|---|---|
+| `tls.enabled` | `false` | |
+| `tls.existingSecret` | `""` | Secret with `tls.crt` and `tls.key`. Required when enabled. |
+| `tls.certPath`, `tls.keyPath` | `/etc/certs/tls.*` | |
+| `tls.caPath` | `""` | |
+| `tls.verifyClient` | `never` | `never`, `allow`, `try` or `demand`. |
+| `tls.protocolMin` | `3.3` | `3.3` is TLS 1.2. |
+
+### Tuning
+
+| Key | Default | Description |
+|---|---|---|
+| `config.logLevel` | `""` | Image default: `16640` with replication, else `256`. |
+| `config.threads` | `16` | |
+| `config.passwordHash` | `{SSHA}` | |
+| `config.querySizeSoft` / `querySizeHard` | `500` / `1000` | Admins and the replicator are exempt. |
+| `config.connMaxPending` / `connMaxPendingAuth` | `100` / `1000` | |
+| `config.readAccessSubject` | `users` | ACL subject given read access. |
+
+### Storage
+
+| Key | Default | Description |
+|---|---|---|
+| `persistence.enabled` | `true` | `false` uses `emptyDir` — data is lost on restart. |
+| `persistence.storageClass` | `""` | Must use `WaitForFirstConsumer`. |
+| `persistence.data.size` | `5Gi` | Must exceed `olcDbMaxSize`, hardcoded to 1 GiB in the image. |
+| `persistence.config.size` | `1Gi` | `cn=config`. |
+| `persistence.logs.size` | `1Gi` | |
+
+### Networking, probes and policies
+
+| Key | Default | Description |
+|---|---|---|
+| `service.type` | `ClusterIP` | |
+| `service.ldapPort` / `ldapsPort` | `389` / `636` | |
+| `service.annotations` | `{}` | |
+| `serviceAccount.create` | `true` | |
+| `serviceAccount.name`, `serviceAccount.annotations` | `""`, `{}` | |
+| `podSecurityContext.runAsNonRoot` | `false` | The image starts as root to chown volumes, then `slapd` runs as uid 55. |
+| `securityContext` | 6 added capabilities | |
+| `resources` | 250m/256Mi → 1/1Gi | |
+| `probes.startup.failureThreshold` / `periodSeconds` | `60` / `5` | The budget must stay >= the image's 300s convergence grace. |
+| `probes.readiness.periodSeconds` | `10` | |
+| `probes.liveness.initialDelaySeconds` / `periodSeconds` | `60` / `30` | |
+| `networkPolicy.enabled` | `true` | Admit 389/636 from the providers plus `ingressFrom`. |
+| `networkPolicy.ingressFrom` | `[]` | Raw NetworkPolicy `from:` items. |
+| `podDisruptionBudget.enabled` | `true` | Keeps a provider up during a node drain. Ignored with one replica. |
+| `podDisruptionBudget.maxUnavailable` | `1` | |
+| `spreadAcrossNodes` | `true` | One provider per node. `ScheduleAnyway`, so a single-node cluster still schedules. |
+| `topologySpreadConstraints` | `[]` | Overrides the default spread above. |
+
+### Backup and tests
+
+| Key | Default | Description |
+|---|---|---|
+| `backup.enabled` | `false` | CronJob writing LDIF exports to a PVC. |
+| `backup.schedule` | `0 2 * * *` | |
+| `backup.retentionDays` | `30` | `0` keeps every export. |
+| `backup.historyLimit` | `3` | |
+| `backup.activeDeadlineSeconds` | `3600` | |
+| `backup.persistence.size` | `5Gi` | |
 | `tests.enabled` | `true` | `helm test` pod. |
+| `tests.convergenceTimeoutSeconds` | `120` | |
 
-## Networking
+## Examples
 
-Pods get stable names — `<release>-openldap-0.<release>-openldap-headless.<ns>.svc.<clusterDomain>`
-— and those are what the replication URLs use. Set `clusterDomain` if your cluster does not use
-`cluster.local`.
+**Standalone server** — no replication, no replication password:
 
-The headless Service sets `publishNotReadyAddresses: true` so a starting provider is still
-resolvable by its peers.
+```bash
+helm install ldap vibhuvioio/openldap -n directory \
+  --set replicaCount=1 \
+  --set auth.adminPassword=secret
+```
 
-The client Service is a plain `ClusterIP`. A multi-provider cluster is **not** a load balancer:
-writes are accepted by every node and reconciled asynchronously. Reads may go to the Service;
-point writes at one provider or at a proxy you control.
+**With TLS and encrypted replication**:
 
-`NetworkPolicy` admits 389/636 from the provider pods and from `networkPolicy.ingressFrom`.
-`olcConnMaxPending` is a DoS absorber, not an authorisation control.
+```bash
+kubectl -n directory create secret tls ldap-tls --cert=tls.crt --key=tls.key
+
+helm install ldap vibhuvioio/openldap -n directory \
+  --set auth.existingSecret=ldap-auth \
+  --set tls.enabled=true --set tls.existingSecret=ldap-tls \
+  --set replication.startTLS=true --set replication.tlsReqCert=demand
+```
+
+**Overlays and nightly exports**:
+
+```bash
+helm install ldap vibhuvioio/openldap -n directory \
+  --set auth.existingSecret=ldap-auth \
+  --set features.memberOf=true \
+  --set features.passwordPolicy=true \
+  --set backup.enabled=true --set backup.schedule="0 2 * * *"
+```
+
+**Reach the directory only from your app namespace**:
+
+```yaml
+# values-prod.yaml
+networkPolicy:
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: my-app
+```
 
 ## Operations
 
 ```bash
-# Replication status with convergence checks.
+# Replication status and convergence.
 kubectl -n directory exec ldap-openldap-0 -- \
   env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
   /usr/local/bin/scripts/ldapcheck.sh --peers
 
-kubectl -n directory logs ldap-openldap-0
+helm upgrade ldap vibhuvioio/openldap -n directory --version 1.0.0 \
+  --set auth.existingSecret=ldap-auth
+
+helm uninstall ldap -n directory
 ```
 
-`ldapcheck.sh --peers` takes the list from `REPLICATION_PEERS` inside the container. The
-`env LDAP_ADMIN_PASSWORD_FILE=…` is needed because `kubectl exec` does not inherit what PID 1
-loaded, and this chart never puts the password in the container environment.
+`kubectl exec` does not inherit what PID 1 loaded, so pass `LDAP_ADMIN_PASSWORD_FILE`
+explicitly; the chart never puts the password in the container environment.
 
-### Replacing a node
-
-Deleting a pod is safe; it re-syncs. To rebuild from scratch, delete the pod and its PVCs:
+**Replacing a node.** Deleting a pod is safe — it re-syncs from its peers. To rebuild from
+scratch, delete the PVCs too:
 
 ```bash
 kubectl -n directory delete pod ldap-openldap-2
-kubectl -n directory delete pvc data-ldap-openldap-2 config-ldap-openldap-2 logs-ldap-openldap-2
+kubectl -n directory delete pvc \
+  data-ldap-openldap-2 config-ldap-openldap-2 logs-ldap-openldap-2
 ```
 
-Never rename a pod or move a PVC to a differently-named pod: `SERVER_ID` comes from the
-ordinal.
+Never rename a pod or move a PVC to a differently-named pod: `SERVER_ID` is derived from the
+pod ordinal.
 
-### Backup
-
-`backup.enabled=true` exports the data suffix over LDAP into a PVC. That is **online**, not a
-crash-consistent snapshot: `slapcat` opens the LMDB environment directly and cannot run in a
-separate Job while a provider holds the RWO volume.
-
-For a better snapshot, run `slapcat` inside a provider. It opens the mdb environment read-only
-and emits every database, including `cn=config`:
+**Backups.** `backup.enabled=true` exports over LDAP, which is online and therefore
+consistent per entry but not across entries. For a snapshot that includes `cn=config`:
 
 ```bash
 kubectl -n directory exec ldap-openldap-0 -- \
-  slapcat -F /etc/openldap/slapd.d -l /logs/snapshot-$(date -u +%Y%m%dT%H%M%SZ).ldif
-kubectl -n directory cp ldap-openldap-0:/logs/snapshot-*.ldif ./snapshot.ldif
+  slapcat -F /etc/openldap/slapd.d -l /logs/snapshot.ldif
 ```
 
-A strictly consistent snapshot means a maintenance window. Back up the data **and**
-`cn=config`: a data LDIF alone cannot rebuild a node, having no ACLs, overlays, indices or
-replication configuration.
+A data-only LDIF cannot rebuild a node: it carries no ACLs, overlays, indices or replication
+configuration.
 
-## Constraints the image imposes
+## Limitations
 
-- `runAsNonRoot: true` does not work — PID 1 is root so it can chown the volumes, then `slapd`
-  runs as uid 55.
-- Secrets are files, not environment variables; `env:` values show up in
-  `kubectl describe pod`.
-- `olcDbMaxSize` is not configurable (1 GiB).
+These come from the image, not the chart, and they bound what you can run in production.
 
-## Testing
+**The directory is capped at 1 GiB.** `olcDbMaxSize` is hardcoded to 1073741824 bytes
+(`ldif/templates/configure-database.ldif`) and is not configurable. Size
+`persistence.data` above that, but the cap itself is the ceiling: past it, writes fail.
 
-Three layers, cheapest first.
-
-**1. `helm lint` / `helm template`**
+**Not compatible with the `restricted` Pod Security Standard.** PID 1 runs as root so it can
+`chown` the volumes before `slapd` drops to uid 55, so the pod needs `baseline` at most. On a
+cluster that enforces `restricted` by default, install into a namespace with a `baseline`
+label:
 
 ```bash
-helm lint . --set auth.adminPassword=x --set auth.replicationPassword=x
-helm template t . --set auth.adminPassword=x --set auth.replicationPassword=x \
-  | docker run --rm -i ghcr.io/yannh/kubeconform:v0.6.7 -strict -summary
+kubectl label namespace directory \
+  pod-security.kubernetes.io/enforce=baseline
 ```
 
-The `lint` workflow renders every value permutation, validates each against the Kubernetes
-schemas, shellchecks the bash embedded in the StatefulSet, CronJob and test pod, and checks
-that `appVersion` names an image that exists on Docker Hub.
+**Multi-master has no conflict resolution.** Every provider accepts writes and they converge on
+`contextCSN`, but two simultaneous writes to the same attribute on different providers can
+diverge silently — OpenLDAP has no merge step. Either write to one provider (the client
+Service is not a write balancer) or partition your data so no two writers touch the same
+attribute.
 
-**2. Docker rig** — the StatefulSet's environment and entrypoint on plain Docker, no cluster.
-Catches what `helm template` cannot: env values and peer URLs that only `slapd` rejects.
+**Backups are online.** See [Operations](#operations).
 
-```bash
-hack/docker-rig.sh --replicas 3
-hack/docker-rig.sh --replicas 1     # standalone
-```
+**The image tag is the OpenLDAP version.** A chart release that only fixes the chart does not
+change the image. `appVersion` records which OpenLDAP the chart expects, and the release
+workflow refuses to publish unless that image exists on Docker Hub.
 
-**3. kind e2e** — installs the chart, waits for probes, writes on ordinal 0 and polls the
-others, runs `helm test`, then deletes a pod and asserts it rejoins.
+## Troubleshooting
 
-```bash
-kind create cluster
-helm install ldap . -n directory --create-namespace --set auth.existingSecret=ldap-auth
-helm test ldap -n directory
-```
+| Symptom | Cause |
+|---|---|
+| Pods never become Ready, `FAILED: initialisation has not completed` | Configuration failed; check `kubectl logs`. |
+| `ENABLE_REPLICATION=true but no olcSyncRepl statements` | `replicaCount=1` with an older chart. Upgrade, or set `replication.enabled=false`. |
+| Bind fails with `Invalid credentials (49)` from your own client | Your password file ended with a newline. The image strips CR/LF; strip it too. |
+| `data` PVC pending forever | StorageClass uses `Immediate` binding and bound into another zone. |
+| PVC smaller than 1 GiB fails at startup | `olcDbMaxSize` is hardcoded to 1 GiB. |
+| Anonymous bind rejected | Expected when `features.disableAnonymousBind=true`. |
+| Pod CrashLoopBackOff, log says `could not stat config file "/etc/openldap/slapd.conf"` | Chart older than 1.0.0, missing the `seed-config` init container. Upgrade. |
+| PVC pending forever on a node drain | `podDisruptionBudget` cannot evict enough providers; `maxUnavailable` is 1 by design. |
 
-## Layout
+## Links
 
-```
-openldap-helmchart/
-├── Chart.yaml
-├── values.yaml
-├── README.md
-├── LICENSE
-├── hack/docker-rig.sh             # the chart's container contract, without a cluster
-├── templates/
-│   ├── _helpers.tpl
-│   ├── statefulset.yaml
-│   ├── service-headless.yaml
-│   ├── service-client.yaml
-│   ├── secret.yaml
-│   ├── serviceaccount.yaml
-│   ├── networkpolicy.yaml
-│   ├── backup-cronjob.yaml
-│   ├── NOTES.txt
-│   └── tests/connection.yaml      # helm test
-└── .github/workflows/
-    ├── lint.yml                   # helm lint + template + kubeconform + shellcheck
-    ├── e2e.yml                    # kind: 3 providers, convergence, restart
-    └── release.yml                # chart-releaser -> gh-pages + GitHub Release
-```
+- [Docker image](https://hub.docker.com/r/vibhuvioio/openldap)
+- [Image source](https://github.com/VibhuviOiO/openldap-docker)
+- [Chart source and issues](https://github.com/VibhuviOiO/openldap-helmchart)
+- [Artifact Hub](https://artifacthub.io/packages/helm/vibhuvioio/openldap)
+- [vibhuvioio.com](https://vibhuvioio.com)

@@ -34,6 +34,35 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      initContainers:
+        # Kubernetes mounts an empty PVC here, which HIDES the cn=config skeleton
+        # the image ships at /etc/openldap/slapd.d. Docker populates a fresh
+        # named volume from the image; Kubernetes does not, and slapd cannot
+        # start without those 9 files:
+        #   could not stat config file "/etc/openldap/slapd.conf"
+        #   slapd stopped. -> CrashLoopBackOff
+        # The PVC is mounted at /config instead of /etc/openldap/slapd.d so the
+        # image's own copy stays visible to copy from.
+        - name: seed-config
+          image: {{ include "openldap.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              if [ -n "$(ls -A /config)" ]; then
+                echo "cn=config already initialised, leaving it alone"
+                exit 0
+              fi
+              cp -a /etc/openldap/slapd.d/. /config/
+              echo "seeded $(find /config -mindepth 1 | wc -l) cn=config entries"
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.initResources | nindent 12 }}
+          volumeMounts:
+            - name: config
+              mountPath: /config
       containers:
         - name: openldap
           image: {{ include "openldap.image" . | quote }}
@@ -206,9 +235,17 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
+      {{- if .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
-        {{- toYaml . | nindent 8 }}
+        {{- toYaml .Values.topologySpreadConstraints | nindent 8 }}
+      {{- else if .Values.spreadAcrossNodes }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "openldap.selectorLabels" . | nindent 14 }}
       {{- end }}
   {{- if .Values.persistence.enabled }}
   volumeClaimTemplates:

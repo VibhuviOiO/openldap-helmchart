@@ -74,7 +74,11 @@ with open(f"{work}/env.sh", "w") as fh:
         fh.write("export %s=%s\n" % (e["name"], "'" + e["value"].replace("'", "'\\''") + "'"))
 with open(f"{work}/shim.sh", "w") as fh:
     fh.write("\n".join(c["args"]) + "\n")
-print("    env vars: %d, shim: %d lines" % (len(c["env"]), len(c["args"][0].splitlines())))
+init = sts["spec"]["template"]["spec"].get("initContainers") or []
+with open(f"{work}/init.sh", "w") as fh:
+    fh.write("\n".join(init[0]["args"]) + "\n" if init else "true\n")
+print("    env vars: %d, shim: %d lines, init: %d container(s)"
+      % (len(c["env"]), len(c["args"][0].splitlines()), len(init)))
 PY
 
 echo "==> starting ${REPLICAS} providers from ${IMAGE_TAG}"
@@ -83,13 +87,26 @@ docker network create "$NET" >/dev/null
 for i in $(seq 0 $((REPLICAS - 1))); do
     docker rm -f "${PREFIX}-${i}" >/dev/null 2>&1 || true
     fqdn="${PREFIX}-${i}.${PREFIX}-headless.default.svc.cluster.local"
-    # Stands in for the headless Service's per-pod DNS.
+
+    # One volume set per replica, like volumeClaimTemplates, and empty -- which
+    # is the whole point: Kubernetes mounts an empty PVC where the image ships
+    # its cn=config skeleton, so the chart's seed-config initContainer has to put
+    # it back. Run that exact command here or this rig would not reproduce a
+    # real cluster.
+    vol="${WORKDIR}/vol/${i}"
+    mkdir -p "${vol}/config" "${vol}/data" "${vol}/logs"
+    docker run --rm -v "${vol}/config:/config" --entrypoint /bin/bash \
+        "vibhuvioio/openldap:${IMAGE_TAG}" -c "$(cat "${WORKDIR}/init.sh")" || exit 1
+
     docker run -d --name "${PREFIX}-${i}" --hostname "${PREFIX}-${i}" --network "$NET" \
         --network-alias "$fqdn" \
         --network-alias "${PREFIX}-${i}.${PREFIX}-headless" \
         -v "${WORKDIR}/env.sh:/etc/rig-env.sh:ro" \
         -v "${WORKDIR}/shim.sh:/etc/rig-shim.sh:ro" \
         -v "${WORKDIR}/secrets:/run/secrets:ro" \
+        -v "${vol}/config:/etc/openldap/slapd.d" \
+        -v "${vol}/data:/var/lib/ldap" \
+        -v "${vol}/logs:/logs" \
         --entrypoint /bin/bash \
         "vibhuvioio/openldap:${IMAGE_TAG}" \
         -c 'set -a; . /etc/rig-env.sh; set +a; . /etc/rig-shim.sh' >/dev/null
@@ -139,15 +156,28 @@ if [ "$REPLICAS" -gt 1 ]; then
         docker exec "$@" "${PREFIX}-0" /usr/local/bin/scripts/ldapcheck.sh --peers "$PEERS"
     }
 
-    if run_ldapcheck -e LDAP_ADMIN_PASSWORD= -e LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password; then
-        echo "    ldapcheck passed (credential read from the mounted Secret)"
-    elif run_ldapcheck -e LDAP_ADMIN_PASSWORD=rigadmin; then
-        echo "    ldapcheck passed (credential passed in the environment)"
-        echo "    note: this image's ldapcheck does not read LDAP_ADMIN_PASSWORD_FILE yet,"
-        echo "          so the chart's documented exec command needs the next image build."
-    else
+    # Retry: a freshly started mesh briefly reports differing contextCSNs, which
+    # ldapcheck correctly calls a failure. Convergence is eventual, so poll.
+    ok=false
+    for _ in $(seq 1 12); do
+        if run_ldapcheck -e LDAP_ADMIN_PASSWORD= \
+                -e LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password >/tmp/rig-ldapcheck.log 2>&1; then
+            ok=true
+            echo "    ldapcheck passed (credential read from the mounted Secret)"
+            break
+        fi
+        if run_ldapcheck -e LDAP_ADMIN_PASSWORD=rigadmin >/tmp/rig-ldapcheck.log 2>&1; then
+            ok=true
+            echo "    ldapcheck passed (credential passed in the environment)"
+            echo "    note: this image's ldapcheck does not read LDAP_ADMIN_PASSWORD_FILE yet,"
+            echo "          so the chart's documented exec command needs the next image build."
+            break
+        fi
+        sleep 5
+    done
+    if [ "$ok" != true ]; then
         echo "FAIL: ldapcheck reported problems" >&2
-        run_ldapcheck -e LDAP_ADMIN_PASSWORD=rigadmin >&2 || true
+        cat /tmp/rig-ldapcheck.log >&2
         exit 1
     fi
 else

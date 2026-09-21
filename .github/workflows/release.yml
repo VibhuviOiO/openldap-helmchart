@@ -31,12 +31,12 @@ jobs:
     name: publish chart
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.17.1
 
@@ -52,15 +52,12 @@ jobs:
           repo="${GITHUB_REPOSITORY##*/}"
 
           # Tag and chart version must agree, or the repo serves a version
-          # nobody tagged.
+          # nobody tagged. The chart version is independent of the image, so the
+          # OpenLDAP version is not part of the tag.
           if [ "$tag" != "$version" ]; then
             echo "::error::tag ${ref} does not match Chart.yaml version ${version}"
             exit 1
           fi
-          case "$tag" in
-            "$app_version"|"$app_version"-[0-9]*) ;;
-            *) echo "::error::tag ${ref} does not match appVersion ${app_version}"; exit 1 ;;
-          esac
           # image.tag defaults to appVersion; never publish a dangling tag.
           docker manifest inspect "vibhuvioio/openldap:${app_version}" >/dev/null \
             || { echo "::error::vibhuvioio/openldap:${app_version} is not on Docker Hub"; exit 1; }
@@ -126,22 +123,31 @@ jobs:
       - name: Published chart is installable
         run: |
           set -euo pipefail
-          # Pages needs a moment to serve the new index.
+          url="${{ steps.meta.outputs.url }}"
+          version="${{ steps.meta.outputs.version }}"
+
+          # Poll for THIS VERSION, not for the repository being reachable.
+          # Pages keeps serving the previous index.yaml for minutes after a push,
+          # and `helm repo add` succeeds happily against that stale copy -- which
+          # is why the second release failed this step while the first passed.
           ok=false
-          for _ in $(seq 1 18); do
-            if helm repo add vibhuvioio "${{ steps.meta.outputs.url }}" >/dev/null 2>&1; then
+          for _ in $(seq 1 30); do
+            helm repo add vibhuvioio "$url" >/dev/null 2>&1 || true
+            if helm show chart vibhuvioio/openldap --version "$version" >/dev/null 2>&1; then
               ok=true
               break
             fi
             sleep 10
           done
           if [ "$ok" != true ]; then
-            echo "::error::${{ steps.meta.outputs.url }} is not serving a Helm repo yet."
-            echo "::error::Enable it once in Settings -> Pages (branch: gh-pages, /) and re-run this job."
+            echo "::error::${url} never served openldap ${version}."
+            echo "::error::If this is the first release, enable Settings -> Pages (branch: gh-pages, /)."
             exit 1
           fi
-          helm repo update
-          helm search repo vibhuvioio/openldap --versions | head -5
-          helm template smoke vibhuvioio/openldap --version "${{ steps.meta.outputs.version }}" \
+
+          # --devel: Helm hides prerelease chart versions from search, so without
+          # it a -N chart is invisible here even though it is published.
+          helm search repo vibhuvioio/openldap --versions --devel | head -5
+          helm template smoke vibhuvioio/openldap --version "$version" \
             --set auth.adminPassword=ci --set auth.replicationPassword=ci > /dev/null
-          echo "openldap-${{ steps.meta.outputs.version }} installs from the repo"
+          echo "openldap-${version} installs from the repo"

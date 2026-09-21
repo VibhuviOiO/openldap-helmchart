@@ -2,9 +2,9 @@ apiVersion: v2
 name: openldap
 description: Production OpenLDAP with multi-provider replication, overlays and TLS (vibhuvioio/openldap)
 type: application
-# version tracks appVersion, the way the image tag tracks the OpenLDAP version.
-# A chart-only fix for the same OpenLDAP version appends -N: 2.6.10-1, 2.6.10-2.
-version: 2.6.10-1
+# Chart semver, independent of the image. appVersion is the OpenLDAP version the
+# chart installs, and is what image.tag defaults to.
+version: 1.0.0
 appVersion: "2.6.10"
 kubeVersion: ">=1.24.0-0"
 # Square, vector, and already yours.
@@ -39,6 +39,10 @@ annotations:
   artifacthub.io/changes: |
     - kind: added
       description: Initial chart - StatefulSet, per-pod PVCs, multi-provider replication
+    - kind: fixed
+      description: Seed the cn=config volume, which Kubernetes mounts empty and Docker populates
+    - kind: added
+      description: PodDisruptionBudget and default topology spread across nodes
   artifacthub.io/links: |
     - name: Docker image
       url: https://hub.docker.com/r/vibhuvioio/openldap

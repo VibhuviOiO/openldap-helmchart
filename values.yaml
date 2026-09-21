@@ -133,6 +133,14 @@ resources:
     cpu: "1"
     memory: 1Gi
 
+# The seed-config init container only copies a few files.
+initResources:
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    memory: 128Mi
+
 probes:
   # failureThreshold x periodSeconds must be >= the image's REPLICATION_CSN_GRACE
   # (300s), otherwise a starting node is killed while the healthcheck still
@@ -171,4 +179,15 @@ tests:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+# Empty renders the default anti-affinity below.
 topologySpreadConstraints: []
+
+# Keeps at least one provider serving during a node drain. Disabled
+# automatically with one replica, where there is nothing to protect.
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+# Default spread: one provider per node, so losing a node cannot take out the
+# whole cluster. ScheduleAnyway, so a single-node cluster still schedules.
+spreadAcrossNodes: true

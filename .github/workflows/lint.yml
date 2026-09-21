@@ -14,9 +14,9 @@ jobs:
     name: helm lint and render
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.17.1
 
@@ -124,7 +124,9 @@ jobs:
                       else:
                           pods = [doc]
                       for pod in pods:
-                          for c in pod["spec"]["containers"]:
+                          containers = list(pod["spec"].get("initContainers") or []) \
+                              + list(pod["spec"]["containers"])
+                          for c in containers:
                               body = "\n".join(c.get("args") or [])
                               if body.strip():
                                   yield f'{doc["kind"]}/{doc["metadata"]["name"]}/{c["name"]}', body
