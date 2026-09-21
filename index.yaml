@@ -16,7 +16,7 @@ entries:
           url: https://github.com/VibhuviOiO/openldap-docker
     apiVersion: v2
     appVersion: 2.6.10
-    created: "2026-09-20T21:43:00.843344489Z"
+    created: "2026-09-21T04:21:19.810971684Z"
     description: Production OpenLDAP with multi-provider replication, overlays and
       TLS (vibhuvioio/openldap)
     digest: e3d9146d823debf2d215f90ad57ccc7a04e0ab912525e866a2c0a7c495cce22c
@@ -56,7 +56,7 @@ entries:
           url: https://github.com/VibhuviOiO/openldap-docker
     apiVersion: v2
     appVersion: 2.6.10
-    created: "2026-09-20T21:43:00.842477915Z"
+    created: "2026-09-21T04:21:19.810110185Z"
     description: Production OpenLDAP with multi-provider replication, overlays and
       TLS (vibhuvioio/openldap)
     digest: c6ab7716da808695028015f68bb1b5dec8058e611236b8e5d7dad2b91f6eae65
@@ -85,4 +85,53 @@ entries:
     urls:
     - https://VibhuviOiO.github.io/openldap-helmchart/openldap-2.6.10-1.tgz
     version: 2.6.10-1
-generated: "2026-09-20T21:43:00.841472974Z"
+  - annotations:
+      artifacthub.io/category: database
+      artifacthub.io/changes: |
+        - kind: added
+          description: Initial chart - StatefulSet, per-pod PVCs, multi-provider replication
+        - kind: fixed
+          description: Seed the cn=config volume, which Kubernetes mounts empty and Docker populates
+        - kind: added
+          description: PodDisruptionBudget and default topology spread across nodes
+      artifacthub.io/images: |
+        - name: openldap
+          image: vibhuvioio/openldap:2.6.10
+      artifacthub.io/license: MIT
+      artifacthub.io/links: |
+        - name: Docker image
+          url: https://hub.docker.com/r/vibhuvioio/openldap
+        - name: Image source
+          url: https://github.com/VibhuviOiO/openldap-docker
+    apiVersion: v2
+    appVersion: 2.6.10
+    created: "2026-09-21T04:21:19.809229701Z"
+    description: Production OpenLDAP with multi-provider replication, overlays and
+      TLS (vibhuvioio/openldap)
+    digest: 1900fc0e2654d12d44a3ac6e2cbc302dac13a22cf385169b87c2201335c591e4
+    home: https://vibhuvioio.com/openldap-docker/
+    icon: https://vibhuvioio.com/img/logo.svg
+    keywords:
+    - ldap
+    - openldap
+    - ldap-server
+    - directory
+    - identity
+    - authentication
+    - replication
+    - high-availability
+    - multi-master
+    - slapd
+    kubeVersion: '>=1.24.0-0'
+    maintainers:
+    - name: Jinna Baalu
+      url: https://github.com/VibhuviOiO
+    name: openldap
+    sources:
+    - https://github.com/VibhuviOiO/openldap-helmchart
+    - https://github.com/VibhuviOiO/openldap-docker
+    type: application
+    urls:
+    - https://VibhuviOiO.github.io/openldap-helmchart/openldap-1.0.0.tgz
+    version: 1.0.0
+generated: "2026-09-21T04:21:19.808167468Z"
