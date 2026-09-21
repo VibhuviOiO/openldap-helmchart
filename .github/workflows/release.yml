@@ -132,7 +132,10 @@ jobs:
           # is why the second release failed this step while the first passed.
           ok=false
           for _ in $(seq 1 30); do
-            helm repo add vibhuvioio "$url" >/dev/null 2>&1 || true
+            # --force-update, not plain add: once the repo exists, `helm repo add`
+            # is a no-op and the loop would keep testing the index it cached on
+            # the first iteration, which is the stale one it is meant to wait out.
+            helm repo add --force-update vibhuvioio "$url" >/dev/null 2>&1 || true
             if helm show chart vibhuvioio/openldap --version "$version" >/dev/null 2>&1; then
               ok=true
               break
