@@ -110,11 +110,15 @@ jobs:
           for ordinal in 1 2; do
             ok=false
             for _ in $(seq 1 24); do
-              if kubectl -n directory exec -i "ldap-openldap-${ordinal}" -- \
+              # Captured, not piped. `grep -q` exits on the first match and closes
+              # the pipe; `pipefail` then surfaces kubectl's SIGPIPE (141) as a
+              # failure even though the entry was found.
+              found=$(kubectl -n directory exec -i "ldap-openldap-${ordinal}" -- \
                    env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
                    ldapsearch -x -H ldap://localhost -D cn=Manager,dc=example,dc=com \
                      -y /run/secrets/admin-password \
-                     -b ou=Cluster,dc=example,dc=com -s base dn 2>/dev/null | grep -q '^dn:'; then
+                     -b ou=Cluster,dc=example,dc=com -s base dn 2>/dev/null || true)
+              if grep -q '^dn:' <<<"$found"; then
                 ok=true
                 break
               fi
@@ -153,11 +157,12 @@ jobs:
           [ "$ready" = "3" ] || { echo "::error::only ${ready}/3 Ready after upgrade"; exit 1; }
 
           # The entry written before the upgrade must have survived it.
-          kubectl -n directory exec ldap-openldap-0 -- \
+          found=$(kubectl -n directory exec ldap-openldap-0 -- \
             env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
             ldapsearch -x -H ldap://localhost -D cn=Manager,dc=example,dc=com \
               -y /run/secrets/admin-password \
-              -b ou=Cluster,dc=example,dc=com -s base dn | grep -q '^dn:'
+              -b ou=Cluster,dc=example,dc=com -s base dn)
+          grep -q '^dn:' <<<"$found"
           echo "upgrade preserved the data"
 
       - name: Backup CronJob writes an export
@@ -189,11 +194,12 @@ jobs:
             --wait --timeout 10m
 
           kubectl -n tls get pods
-          kubectl -n tls exec ldaptls-openldap-0 -- \
+          found=$(kubectl -n tls exec ldaptls-openldap-0 -- \
             env LDAPTLS_REQCERT=never \
             ldapsearch -x -H ldaps://localhost:636 \
               -D cn=Manager,dc=example,dc=com -y /run/secrets/admin-password \
-              -b dc=example,dc=com -s base dn | grep -q '^dn:'
+              -b dc=example,dc=com -s base dn)
+          grep -q '^dn:' <<<"$found"
           echo "ldaps bind works"
 
           helm uninstall ldaptls -n tls --wait
@@ -215,11 +221,12 @@ jobs:
 
           ok=false
           for _ in $(seq 1 36); do
-            if kubectl -n directory exec -i ldap-openldap-2 -- \
+            found=$(kubectl -n directory exec -i ldap-openldap-2 -- \
                  env LDAP_ADMIN_PASSWORD_FILE=/run/secrets/admin-password \
                  ldapsearch -x -H ldap://localhost -D cn=Manager,dc=example,dc=com \
                    -y /run/secrets/admin-password \
-                   -b ou=AfterRestart,dc=example,dc=com -s base dn 2>/dev/null | grep -q '^dn:'; then
+                   -b ou=AfterRestart,dc=example,dc=com -s base dn 2>/dev/null || true)
+            if grep -q '^dn:' <<<"$found"; then
               ok=true
               break
             fi
