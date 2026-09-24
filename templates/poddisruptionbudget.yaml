@@ -11,5 +11,5 @@ spec:
   maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
   selector:
     matchLabels:
-      {{- include "openldap.selectorLabels" . | nindent 6 }}
+      {{- include "openldap.serverSelectorLabels" . | nindent 6 }}
 {{- end }}

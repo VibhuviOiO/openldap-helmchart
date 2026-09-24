@@ -76,6 +76,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if and .Values.replication.enabled (gt (int .Values.replicaCount) 1) -}}true{{- else -}}false{{- end -}}
 {{- end -}}
 
+{{/*
+Selector for the provider pods ONLY.
+
+The helm test pod and the backup Job pods carry openldap.selectorLabels too, so
+matching on those labels alone made the Services publish non-LDAP pods as
+endpoints and made the PodDisruptionBudget try to manage Jobs -- which is what
+produced "Pods selected by this PodDisruptionBudget were found to be unmanaged"
+and "jobs.batch does not implement the scale subresource".
+*/}}
+{{- define "openldap.serverSelectorLabels" -}}
+{{ include "openldap.selectorLabels" . }}
+app.kubernetes.io/component: ldap
+{{- end -}}
+
 {{- define "openldap.image" -}}
 {{- printf "%s:%s" .Values.image.repository (default .Chart.AppVersion .Values.image.tag) -}}
 {{- end -}}

@@ -13,8 +13,8 @@ permissions:
   contents: read
 
 jobs:
-  kind:
-    name: 3 providers on kind
+  k3s:
+    name: 3 providers on k3s
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -24,13 +24,28 @@ jobs:
         with:
           version: v3.17.1
 
-      - uses: helm/kind-action@v1.15.0
-        with:
-          cluster_name: openldap
+      # k3s, not kind. kind ships containerd 2.x, where slapd grows to ~6.9 GiB
+      # and is OOMKilled before it ever listens; the pod sits in
+      # CrashLoopBackOff with no useful error. v1.31.4 is the last k3s line on
+      # containerd 1.7, so the pin is deliberate - do not bump it without
+      # re-reading the README section "Use k3s, not kind".
+      - name: Start the cluster
+        run: |
+          set -euo pipefail
+          docker run -d --name k3s --privileged \
+            -p 6443:6443 -p 1389:1389 -p 1689:1689 \
+            rancher/k3s:v1.31.4-k3s1 server \
+            --disable=traefik --write-kubeconfig-mode=644 --tls-san=127.0.0.1
+
+          until docker exec k3s test -f /etc/rancher/k3s/k3s.yaml; do sleep 2; done
+
+          docker exec k3s cat /etc/rancher/k3s/k3s.yaml > "$RUNNER_TEMP/k3s.yaml"
+          chmod 600 "$RUNNER_TEMP/k3s.yaml"
+          echo "KUBECONFIG=$RUNNER_TEMP/k3s.yaml" >> "$GITHUB_ENV"
 
       - name: Show the cluster
         run: |
-          kubectl version
+          kubectl wait --for=condition=Ready node --all --timeout=5m
           kubectl get storageclass
           kubectl get nodes -o wide
 
@@ -46,11 +61,26 @@ jobs:
       - name: helm install (3 providers)
         run: |
           set -euo pipefail
+          # Diagnostics run INSIDE this step: the `--log-failed` view of a run
+          # only shows failing steps, so a separate `if: failure()` step never
+          # appears with the reason the install died.
+          dump() {
+            kubectl -n directory get pods,pvc -o wide || true
+            kubectl -n directory get events --sort-by=.lastTimestamp | tail -30 || true
+            for p in $(kubectl -n directory get pods -l app.kubernetes.io/name=openldap -o name 2>/dev/null); do
+              echo "===== $p ====="
+              kubectl -n directory describe "$p" | tail -60 || true
+              for c in seed-config openldap; do
+                echo "--- logs ($c) ---"
+                kubectl -n directory logs "$p" -c "$c" --tail=80 || true
+              done
+            done
+          }
           helm install ldap . -n directory \
             --set auth.existingSecret=ldap-auth \
             --set features.memberOf=true \
             --set image.pullPolicy=Always \
-            --wait --timeout 10m
+            --wait --timeout 10m || { dump; exit 1; }
 
       - name: Every provider is Ready and its PVC is bound
         run: |

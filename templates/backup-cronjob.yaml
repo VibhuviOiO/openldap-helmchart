@@ -25,7 +25,7 @@ metadata:
     {{- include "openldap.labels" . | nindent 4 }}
 spec:
   schedule: {{ .Values.backup.schedule | quote }}
-  concurrencyPolicy: Forbidden
+  concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: {{ .Values.backup.historyLimit }}
   failedJobsHistoryLimit: {{ .Values.backup.historyLimit }}
   jobTemplate:
@@ -35,8 +35,12 @@ spec:
         metadata:
           labels:
             {{- include "openldap.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
         spec:
           restartPolicy: Never
+          # readOnlyRootFilesystem plus a projected service-account token cannot
+          # coexist: the kubelet cannot create the mountpoint in a read-only root.
+          automountServiceAccountToken: false
           securityContext:
             runAsNonRoot: true
             runAsUser: 65534
@@ -106,7 +110,66 @@ spec:
             - name: secrets
               secret:
                 secretName: {{ include "openldap.secretName" . }}
-                defaultMode: 0400
+                # 0444: this container runs as uid 65534 and the files are owned
+                # by root, so 0400 would read as an empty password.
+                defaultMode: 0444
             - name: tmp
               emptyDir: {}
+---
+# WaitForFirstConsumer storage classes -- local-path, and most cloud defaults --
+# do not bind a claim until a pod consumes it, and the CronJob above does not run
+# until its schedule. Without this the backup claim stays Pending and
+# `helm install --wait` / `helm upgrade --wait` times out on an otherwise healthy
+# release, because Helm waits for the PVC to be Bound.
+#
+# It has to be an ordinary resource, NOT a post-install hook: hooks run after
+# Helm has finished waiting, which is exactly too late to unblock the wait. The
+# name carries the image tag so an image change replaces the Job instead of
+# tripping over an immutable field on upgrade, and it deletes itself afterwards.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "openldap.fullname" . }}-backup-bind-{{ .Chart.AppVersion | replace "." "-" }}
+  labels:
+    {{- include "openldap.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 120
+  template:
+    metadata:
+      labels:
+        {{- include "openldap.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: backup
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bind
+          image: {{ include "openldap.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -euo pipefail
+              test -w /backup
+              echo "backup volume is bound and writable"
+          volumeMounts:
+            - name: backup
+              mountPath: /backup
+      volumes:
+        - name: backup
+          persistentVolumeClaim:
+            claimName: {{ include "openldap.fullname" . }}-backup
 {{- end }}

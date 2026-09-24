@@ -4,12 +4,13 @@ set -euo pipefail
 # docker-rig.sh - runs the StatefulSet's env and entrypoint shim on plain Docker.
 # No cluster, no PVCs, no Services: it tests only what the chart generates.
 #
-# Usage: hack/docker-rig.sh [--replicas N] [--image TAG] [--keep]
+# Usage: hack/docker-rig.sh [--replicas N] [--image TAG] [--set k=v]... [--keep]
 # Needs: bash, docker, helm 3.
 
 REPLICAS=3
 IMAGE_TAG=""
 KEEP=false
+EXTRA_SETS=()
 CHART_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 NET=openldap-rig
 PREFIX=rig-openldap
@@ -18,6 +19,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         --replicas) REPLICAS="$2"; shift 2 ;;
         --image) IMAGE_TAG="$2"; shift 2 ;;
+        --set) EXTRA_SETS+=(--set "$2"); shift 2 ;;
         --keep) KEEP=true; shift ;;
         -h|--help) sed -n '3,8p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 1 ;;
@@ -50,7 +52,8 @@ echo "==> rendering the chart (${REPLICAS} replicas)"
 helm template "$PREFIX" "$CHART_DIR" \
     --set auth.adminPassword=rig --set auth.replicationPassword=rig \
     --set "replicaCount=${REPLICAS}" \
-    --set "image.tag=${IMAGE_TAG}" > "${WORKDIR}/render.yaml"
+    --set "image.tag=${IMAGE_TAG}" \
+    "${EXTRA_SETS[@]+"${EXTRA_SETS[@]}"}" > "${WORKDIR}/render.yaml"
 
 # Trailing newline on purpose: what `--from-file` and `echo pw > f` produce.
 mkdir -p "${WORKDIR}/secrets"

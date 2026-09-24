@@ -8,15 +8,24 @@ metadata:
 spec:
   podSelector:
     matchLabels:
-      {{- include "openldap.selectorLabels" . | nindent 6 }}
+      {{- include "openldap.serverSelectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
   ingress:
-    # Providers reaching each other, and the probes.
+    # Provider-to-provider replication, the probes, and the chart's own test and
+    # backup pods, which need to reach the LDAP port but are not providers.
     - from:
         - podSelector:
             matchLabels:
-              {{- include "openldap.selectorLabels" . | nindent 14 }}
+              {{- include "openldap.serverSelectorLabels" . | nindent 14 }}
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: backup
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              app.kubernetes.io/component: test
       ports:
         - port: ldap
           protocol: TCP

@@ -12,7 +12,7 @@ metadata:
 spec:
   type: {{ .Values.service.type }}
   selector:
-    {{- include "openldap.selectorLabels" . | nindent 4 }}
+    {{- include "openldap.serverSelectorLabels" . | nindent 4 }}
   ports:
     - name: ldap
       port: {{ .Values.service.ldapPort }}

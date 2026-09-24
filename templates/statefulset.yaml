@@ -16,7 +16,7 @@ spec:
   template:
     metadata:
       labels:
-        {{- include "openldap.selectorLabels" . | nindent 8 }}
+        {{- include "openldap.serverSelectorLabels" . | nindent 8 }}
         {{- with .Values.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -27,6 +27,19 @@ spec:
         {{- end }}
     spec:
       serviceAccountName: {{ include "openldap.serviceAccountName" . }}
+      # These pods never call the API server, and the Secret is mounted at
+      # /run/secrets, which SHADOWS /run/secrets/kubernetes.io/serviceaccount --
+      # where Kubernetes projects the token. With the projected token enabled the
+      # pod dies before starting:
+      #   create mountpoint .../kubernetes.io: read-only file system
+      # The chart's ServiceAccount already disables this, but that only applies
+      # when serviceAccount.create=true, so set it on the pod as well.
+      automountServiceAccountToken: false
+      # Kubernetes injects <SERVICE>_PORT for every Service in the namespace. A
+      # release whose service is named `ldap` would inject LDAP_PORT=tcp://...,
+      # colliding with the image's own LDAP_PORT and breaking every healthcheck
+      # probe. The chart's service names avoid it today; this makes it not matter.
+      enableServiceLinks: false
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -221,7 +234,9 @@ spec:
         - name: certs
           secret:
             secretName: {{ required "tls.existingSecret is required when tls.enabled=true" .Values.tls.existingSecret }}
-            defaultMode: 0400
+            # 0440, not 0400: slapd reads the certificate as uid 55, so an
+            # owner-only file leaves it unable to serve ldaps://.
+            defaultMode: 0440
         {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:

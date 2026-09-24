@@ -5,11 +5,17 @@ metadata:
   name: {{ include "openldap.fullname" . }}-test-connection
   labels:
     {{- include "openldap.labels" . | nindent 4 }}
+    app.kubernetes.io/component: test
   annotations:
     "helm.sh/hook": test
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   restartPolicy: Never
+  # This pod never calls the API server. Without this the kubelet projects a
+  # service-account token into /var/run/secrets/kubernetes.io/serviceaccount,
+  # which readOnlyRootFilesystem cannot create, and the pod dies with
+  # StartError: "create mountpoint ... read-only file system".
+  automountServiceAccountToken: false
   securityContext:
     runAsNonRoot: true
     runAsUser: 65534
@@ -124,7 +130,11 @@ spec:
     - name: secrets
       secret:
         secretName: {{ include "openldap.secretName" . }}
-        defaultMode: 0400
+        # 0444, not 0400: this pod runs as uid 65534 and the files are owned by
+        # root, so 0400 makes them unreadable and the password silently reads as
+        # empty -- which the server rejects as an unauthenticated bind (53).
+        # The StatefulSet keeps 0400 because PID 1 reads the secret as root.
+        defaultMode: 0444
     - name: tmp
       emptyDir: {}
 {{- end }}

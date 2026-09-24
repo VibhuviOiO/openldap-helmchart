@@ -12,7 +12,7 @@ cadences are independent and neither should pull the other's tooling in.
 |---|---|---|
 | Versioning | image tag = installed OpenLDAP version | `version` = `appVersion` = OpenLDAP version |
 | Consumers | `docker run`, `docker compose` | `helm install` |
-| CI | build, lint, integration tests | `helm lint`, `helm template`, `kubeconform`, kind e2e |
+| CI | build, lint, integration tests | `helm lint`, `helm template`, `kubeconform`, k3s e2e |
 
 Keep exactly one `docker-compose.yml` in the image repo. Do not add compose variants, Swarm
 files, Kubernetes manifests or Helm charts there.
@@ -110,7 +110,7 @@ hack/docker-rig.sh --replicas 3
 hack/docker-rig.sh --replicas 1     # standalone
 ```
 
-**3. kind e2e** — the only layer that proves the chart installs on Kubernetes. It:
+**3. k3s e2e** — the only layer that proves the chart installs on Kubernetes. It:
 
 1. installs three providers and waits for the probes
 2. runs `helm test` (bind, search, `contextCSN` convergence)
@@ -122,7 +122,15 @@ hack/docker-rig.sh --replicas 1     # standalone
 8. deletes a pod and asserts it rejoins and catches up
 
 ```bash
-kind create cluster
+# The same cluster CI uses. k3s, not kind: kind's containerd 2.x OOM-kills
+# slapd before it listens. See hack/CLUSTER-TESTING.md.
+docker run -d --name k3s --privileged \
+  -p 6443:6443 -p 1389:1389 -p 1689:1689 \
+  rancher/k3s:v1.31.4-k3s1 server \
+  --disable=traefik --write-kubeconfig-mode=644 --tls-san=127.0.0.1
+docker exec k3s cat /etc/rancher/k3s/k3s.yaml > /tmp/k3s.yaml
+export KUBECONFIG=/tmp/k3s.yaml
+
 helm install ldap . -n directory --create-namespace --set auth.existingSecret=ldap-auth
 helm test ldap -n directory
 ```

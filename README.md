@@ -51,9 +51,15 @@ helm test ldap -n directory
 
 ## Connect
 
+`service.type` defaults to `ClusterIP`, so it is only reachable inside the
+cluster; forward a local port to reach it from your machine:
+
 ```bash
-kubectl -n directory port-forward svc/ldap-openldap 389:389
-ldapsearch -x -H ldap://localhost:389 \
+# Ports below 1024 need root; 8389 avoids that.
+kubectl -n directory port-forward svc/ldap-openldap 8389:389
+
+# In another terminal, against the forwarded port.
+ldapsearch -x -H ldap://localhost:8389 \
   -D "cn=Manager,dc=example,dc=com" -W \
   -b "dc=example,dc=com"
 ```

@@ -88,9 +88,16 @@ serviceAccount:
 podAnnotations: {}
 podLabels: {}
 
-# The image starts as root to chown volumes, then slapd runs as uid 55.
+# The image starts as root to chown volumes, then slapd runs as uid 55 (gid 55).
+#
+# fsGroup 55 is the "ldap" group the server runs as. Kubernetes applies it to
+# every volume, which is what makes the TLS certificate readable: the kubelet
+# rewrites 0400 to 0440 for the group, and without it slapd -- uid 55 -- cannot
+# read its own key and every TLS handshake fails with "TLS negotiation failure".
 podSecurityContext:
   runAsNonRoot: false
+  fsGroup: 55
+  fsGroupChangePolicy: OnRootMismatch
 
 securityContext:
   allowPrivilegeEscalation: false
