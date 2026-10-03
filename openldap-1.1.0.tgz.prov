@@ -1,0 +1,68 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+annotations:
+  artifacthub.io/category: database
+  artifacthub.io/changes: |
+    - kind: added
+      description: Initial chart - StatefulSet, per-pod PVCs, multi-provider replication
+    - kind: fixed
+      description: Seed the cn=config volume, which Kubernetes mounts empty and Docker populates
+    - kind: added
+      description: PodDisruptionBudget and default topology spread across nodes
+  artifacthub.io/images: |
+    - name: openldap
+      image: vibhuvioio/openldap:2.6.10
+  artifacthub.io/license: MIT
+  artifacthub.io/links: |
+    - name: Docker image
+      url: https://hub.docker.com/r/vibhuvioio/openldap
+    - name: Image source
+      url: https://github.com/VibhuviOiO/openldap-docker
+apiVersion: v2
+appVersion: 2.6.10
+description: Production OpenLDAP with multi-provider replication, overlays and TLS
+  (vibhuvioio/openldap)
+home: https://vibhuvioio.com/openldap-docker/
+icon: https://vibhuvioio.com/img/logo.svg
+keywords:
+- - ldap
+- - openldap
+- - ldap-server
+- - directory
+- - identity
+- - authentication
+- - replication
+- - high-availability
+- - multi-master
+- - slapd
+kubeVersion: '>=1.24.0-0'
+maintainers:
+- - name: Jinna Baalu
+  url: https://github.com/VibhuviOiO
+name: openldap
+sources:
+- - https://github.com/VibhuviOiO/openldap-helmchart
+- - https://github.com/VibhuviOiO/openldap-docker
+type: application
+version: 1.1.0
+
+...
+files:
+  openldap-1.1.0.tgz: sha256:920a5c2c7fe05767c6d9c15aa7fd15e2e26f4488452ffe5e1352e3024510fa1c
+-----BEGIN PGP SIGNATURE-----
+
+wsFcBAEBCgAQBQJqwF8DCRAn0q9istiGPQAA/ZUQAGU6JufKlN2fXJajodx3R1E3
+KqiJzAM65UVg0G4pTavOXMuxoG3tgps7siZVjHGXfABiPAm2UZ42NrhMVE9XkT5S
+z97OlDDwL7rZ/xLiR7GMYZ9fsM9z+UKVn/IYpTx5k/PifOj8w5XXdgDo2nrgG2aA
+CkX179cD9EMB+ypzgAaUX9UV4KdSTBaTEq0i0C0An0HJp4zK2aKvZpcWVb+AP9oy
+ltedxzJIzdZN/s+YWrvVjppF0TPCQExzYKPVQO9a97l9fNAXlStvBgqcpoNjkMUS
+C6qFYGVCFG9X0Nw0TgyQuNpsTsH7GJnRaAqZMnNuIY7ercuBYrFsr0Ge4IpIfdy5
+1PYzs8ctBBEPMMJ9Mcf9Ko9ZKfO3G66TGDVeQ1ZALlJets4WHeIqJOyjPnicJKIJ
+RRlDARWagIYOIDoYYgJ1p573fERUsfKMcpb0r6PPavxLH6AwdIddm1BS0+Vy9eWn
+2dAo3LVE81S8IcioYF0PvcKCoGpWjkL4Ov+mDDsHaO3aBqGK/KpTsy56bau/Vm05
+EolauAYfbh+rG1IX9gcmIlFcJX1fG+Wuwdej6YT3xVWJhHNeOc2Hkv/GeJk9ioou
+iT34lpM+EraA8yTVmsryK7oVW8vIEOCOySADYSqhUjnQTGHzS334GbjwEIamvwf/
+4RLChsvYC4UFCqxvP4Wb
+=vIkT
+-----END PGP SIGNATURE-----
