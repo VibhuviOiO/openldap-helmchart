@@ -73,6 +73,21 @@ jobs:
       - name: helm lint
         run: helm lint . --set auth.adminPassword=ci --set auth.replicationPassword=ci
 
+      - name: Import Helm signing key
+        env:
+          HELM_SIGNING_KEY_ASC: ${{ secrets.HELM_SIGNING_KEY_ASC }}
+        run: |
+          set -euo pipefail
+          if [ -z "${HELM_SIGNING_KEY_ASC}" ]; then
+            echo "::error::HELM_SIGNING_KEY_ASC is not set; the chart cannot be signed"
+            exit 1
+          fi
+          echo "$HELM_SIGNING_KEY_ASC" | base64 -d > /tmp/signing.asc
+          gpg --batch --import /tmp/signing.asc
+          # helm --keyring wants the legacy secring.gpg layout, not pubring.kbx.
+          # Without this, signing fails with a misleading "private key not found".
+          gpg --export-secret-keys > /tmp/secring.gpg
+
       - name: Package and update gh-pages
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,7 +95,10 @@ jobs:
           REPO_URL: ${{ steps.meta.outputs.url }}
         run: |
           set -euo pipefail
-          helm package . --destination .cr-release-packages
+          # --key takes the OpenPGP USER ID (name or email), NOT the key ID
+          # or fingerprint. A key ID fails with "private key not found".
+          helm package . --destination .cr-release-packages \
+            --sign --key "${{ secrets.HELM_SIGNING_KEY }}" --keyring /tmp/secring.gpg
 
           # An orphan gh-pages branch on first run; a clone after that. The clone
           # brings the previous .tgz files along, which is what keeps older
@@ -96,7 +114,11 @@ jobs:
           fi
 
           cp .cr-release-packages/*.tgz /tmp/gh-pages/
-          helm repo index /tmp/gh-pages --url "$REPO_URL"
+          # The provenance file is what Artifact Hub reads to show "signed".
+          cp .cr-release-packages/*.prov /tmp/gh-pages/
+          helm verify --keyring /tmp/secring.gpg .cr-release-packages/*.tgz
+          helm repo index /tmp/gh-pages --url "$REPO_URL" \
+            --sign --key "${{ secrets.HELM_SIGNING_KEY }}" --keyring /tmp/secring.gpg
 
           # A Helm repository has index.yaml, not index.html, so the Pages root
           # 404s. This landing page is copied on every release, so edit the file
