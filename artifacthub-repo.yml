@@ -1,0 +1,12 @@
+# Artifact Hub repository metadata.
+#
+# For a Helm repository served over HTTP this file is what enables the
+# ownership claim and the verified publisher badge. It must be served at the
+# repository root, next to index.yaml - the release workflow copies it there.
+#
+#   repositoryID  the UUID on the repository's Settings tab
+#   owners        the name and email on your Artifact Hub account
+repositoryID: e5e63c0a-c3dd-4eca-8cb9-73acca11f612
+owners:
+  - name: Jinna Baalu
+    email: 11784253+jinnabaalu@users.noreply.github.com
