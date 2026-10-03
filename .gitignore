@@ -8,3 +8,4 @@ index.yaml
 *.local.yaml
 values.local.yaml
 .render/
+*.tape

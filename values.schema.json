@@ -1,0 +1,179 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OpenLDAP values",
+  "type": "object",
+  "properties": {
+    "replicaCount": {
+      "type": "integer", "minimum": 1,
+      "description": "Number of slapd providers. Above 1 the nodes form a multi-master mesh over cn=config; each provider holds a full writable copy. Keep persistence.data.accessModes as ReadWriteOnce - each replica gets its own volume."
+    },
+    "image": {
+      "type": "object",
+      "description": "OpenLDAP server image.",
+      "properties": {
+        "repository": { "type": "string" },
+        "tag": { "type": "string", "description": "Defaults to the chart appVersion when empty." },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": { "type": "array" },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "clusterDomain": { "type": "string", "description": "Cluster DNS domain, used to build provider hostnames." },
+    "auth": {
+      "type": "object",
+      "description": "Passwords. Supply them here or via auth.existingSecret - the chart refuses to render if neither is set, rather than deploying a directory with a default password.",
+      "properties": {
+        "existingSecret": { "type": "string", "description": "Existing Secret holding the password keys. Preferred for anything real." },
+        "secretKeys": {
+          "type": "object",
+          "description": "Key names within the Secret.",
+          "properties": {
+            "adminPasswordKey": { "type": "string" },
+            "configPasswordKey": { "type": "string" },
+            "replicationPasswordKey": { "type": "string" }
+          }
+        },
+        "adminPassword": { "type": "string", "description": "cn=admin password. Required unless existingSecret is set." },
+        "configPassword": { "type": "string", "description": "cn=config password, used by the replication bootstrap." },
+        "replicationPassword": { "type": "string", "description": "Credential the providers use to replicate to each other. Required when replication is enabled with replicaCount > 1." }
+      }
+    },
+    "ldap": {
+      "type": "object",
+      "description": "Directory naming. Changing domain on an existing release does not rename an already-initialised database.",
+      "properties": {
+        "domain": { "type": "string", "description": "DNS-style domain, e.g. example.com, rendered as dc=example,dc=com." },
+        "organization": { "type": "string", "description": "Value for the o attribute on the base entry." },
+        "baseDn": { "type": "string", "description": "Explicit base DN. Derived from domain when empty." }
+      }
+    },
+    "replication": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Configure provider-to-provider replication. Requires replicaCount > 1 to do anything." },
+        "startTLS": { "type": "boolean", "description": "Replicate over StartTLS instead of plaintext. Requires tls.enabled and a CA both sides trust." },
+        "tlsReqCert": { "type": "string", "enum": ["never", "allow", "try", "demand", "hard"], "description": "TLSVerifyClient setting for replication connections. Use demand or harder in production." }
+      }
+    },
+    "features": {
+      "type": "object",
+      "description": "Optional OpenLDAP overlays, loaded as modules at startup.",
+      "properties": {
+        "memberOf": { "type": "boolean", "description": "Maintain memberOf on user entries from group membership." },
+        "passwordPolicy": { "type": "boolean", "description": "Enable the ppolicy overlay." },
+        "auditLog": { "type": "boolean", "description": "Write an auditlog overlay to a file on the slapd volume. Only readable by a tool that shares that volume - for anything remote, prefer the accesslog overlay, which is queryable over LDAP." },
+        "monitoring": { "type": "boolean", "description": "Enable the monitor backend so cn=Monitor reports per-database statistics." },
+        "disableAnonymousBind": { "type": "boolean", "description": "Reject anonymous binds. Set this before exposing slapd beyond the cluster." },
+        "includeSchemas": { "type": "string", "description": "Comma-separated schemas to load, e.g. cosine,inetorgperson,nis." }
+      }
+    },
+    "tls": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Serve LDAPS on 636 and allow StartTLS on 389." },
+        "existingSecret": { "type": "string", "description": "Secret holding the certificate, key and optional CA." },
+        "certPath": { "type": "string" },
+        "keyPath": { "type": "string" },
+        "caPath": { "type": "string", "description": "CA bundle. Leave empty unless you need client-certificate verification." },
+        "verifyClient": { "type": "string", "enum": ["never", "allow", "try", "demand", "hard"], "description": "TLSVerifyClient. never accepts any client certificate; demand requires one signed by caPath." },
+        "protocolMin": { "type": "string", "description": "Minimum TLS protocol, e.g. 3.3 for TLS 1.2." }
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "cn=config tuning applied at bootstrap.",
+      "properties": {
+        "logLevel": { "type": "string", "description": "slapd log level, e.g. stats, sync, acl or a numeric bitmask. Empty uses the image default." },
+        "threads": { "type": "integer", "minimum": 1 },
+        "passwordHash": { "type": "string", "enum": ["{SSHA}", "{SHA}", "{MD5}", "{CRYPT}", "{CLEARTEXT}"], "description": "Default password hashing scheme for userPassword." },
+        "querySizeSoft": { "type": "integer", "minimum": 1, "description": "sizelimit. Searches returning more than this are truncated unless the client asked otherwise." },
+        "querySizeHard": { "type": "integer", "minimum": 1, "description": "sizelimit hard. Cannot be exceeded by any client." },
+        "connMaxPending": { "type": "integer", "minimum": 1 },
+        "connMaxPendingAuth": { "type": "integer", "minimum": 1 },
+        "readAccessSubject": { "type": "string", "description": "ACL subject granted read access, e.g. users or *." }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "ldapPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "ldapsPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "annotations": { "type": "object" }
+      }
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "create": { "type": "boolean" },
+        "annotations": { "type": "object" },
+        "name": { "type": "string" }
+      }
+    },
+    "podAnnotations": { "type": "object" },
+    "podLabels": { "type": "object" },
+    "podSecurityContext": { "type": "object", "description": "slapd binds to 389, so the container keeps the capabilities it needs rather than running fully restricted." },
+    "securityContext": { "type": "object" },
+    "terminationGracePeriodSeconds": { "type": "integer", "minimum": 0 },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "storageClass": { "type": "string" },
+        "data": { "$ref": "#/definitions/volume", "description": "The directory database. Losing this loses the directory." },
+        "config": { "$ref": "#/definitions/volume", "description": "cn=config, including the replication configuration." },
+        "logs": { "$ref": "#/definitions/volume" }
+      }
+    },
+    "resources": { "type": "object" },
+    "initResources": { "type": "object" },
+    "probes": { "type": "object", "description": "Startup probing is generous because a fresh provider bootstraps the database before it answers." },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "ingressFrom": { "type": "array", "description": "Allowed ingress peers. Restrict this to the UI and to the other providers." }
+      }
+    },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Run slapcat on a schedule into a PVC." },
+        "schedule": { "type": "string", "description": "Cron expression." },
+        "historyLimit": { "type": "integer", "minimum": 0 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "retentionDays": { "type": "integer", "minimum": 1 },
+        "persistence": { "$ref": "#/definitions/volume" }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Run the helm test hook." },
+        "convergenceTimeoutSeconds": { "type": "integer", "minimum": 1, "description": "How long to wait for contextCSN to converge across providers." }
+      }
+    },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "topologySpreadConstraints": { "type": "array" },
+    "podDisruptionBudget": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "maxUnavailable": { "type": "integer", "minimum": 0, "description": "Keep this at 1. Losing quorum-like majority of providers at once is what turns a rolling upgrade into an outage." }
+      }
+    },
+    "spreadAcrossNodes": { "type": "boolean", "description": "Require providers to land on different nodes via pod anti-affinity." }
+  },
+  "definitions": {
+    "volume": {
+      "type": "object",
+      "properties": {
+        "size": { "type": "string" },
+        "accessModes": { "type": "array", "items": { "type": "string", "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"] } }
+      }
+    }
+  }
+}
